@@ -44,7 +44,7 @@ cd infra && npm install       # installs CDK dependencies
 
 | Workstream | Command | Duration |
 |------------|---------|----------|
-| `cli/` | `cd cli && pytest` | ~2 s |
+| `cli/` | `cd cli && python -m pytest` | ~2 s |
 | `cli/` | `cd cli && ruff check` | ~1 s |
 | `cli/` | `cd cli && ruff format` | ~1 s |
 | `infra/` | `cd infra && npm run build` | ~5 s |
@@ -53,18 +53,56 @@ cd infra && npm install       # installs CDK dependencies
 
 ---
 
+## Read Whole Files
+
+When reading a doc or source file to **edit it, summarize it, decide whether
+it's correct, or answer a question that depends on its content**, read the
+**entire** file before acting. Do NOT make decisions based on a partial read
+(`offset` / `limit`, or a `grep`-then-edit shortcut).
+
+Why this matters here:
+
+- Docs in this repo are heavily cross-referenced (e.g. RUN_SAMPLE references
+  PIPELINE_DEVELOP §4 by anchor; the example README deep-links into STATUS).
+  Editing one paragraph without seeing the rest of the file routinely breaks
+  internal consistency or repeats information another section already covers.
+- Source files have implicit invariants spread across the file (e.g.
+  `STAGE_REGISTRY` vs `ALL_STAGES` in `cli/physai/pipeline.py`; `--gres` being
+  optional only when `cfg.get("gres")` is falsy in `build.py`). A partial read
+  hides these.
+- "Looks fine" after a partial read is not "is fine." Multiple bugs found
+  during the doc audit on this branch were introduced exactly this way.
+
+Acceptable partial reads:
+
+- Locating a known string or pattern with `grep -n` followed by a **full Read
+  of the file** before editing.
+- Reading a generated file (e.g. `package-lock.json`, very large logs) where
+  the whole file is too big to be useful and the question is local.
+- Re-checking a small region you've already read in full earlier in the
+  session, where the file is known unchanged.
+
+If a file is genuinely too large to read whole, say so explicitly to the user
+and ask how to proceed — don't silently work from fragments.
+
+---
+
 ## Doc Map
 
 | File | Purpose |
 |------|---------|
-| [docs/USER_MANUAL.md](docs/USER_MANUAL.md) | End-user guide: CLI reference, data management, troubleshooting |
-| [docs/PIPELINE-DESIGN.md](docs/PIPELINE-DESIGN.md) | Platform architecture and design rationale |
-| [docs/PHYSAI-DESIGN.md](docs/PHYSAI-DESIGN.md) | CLI internals: SSH session, build system, pipeline orchestration |
-| [docs/INFRA.md](docs/INFRA.md) | CDK stack layout, lifecycle scripts, deployment |
-| [docs/STATUS.md](docs/STATUS.md) | Phase 1 scope and implementation status |
+| [docs/en/DEPLOYMENT.md](docs/en/DEPLOYMENT.md) | Step-by-step cluster deployment |
+| [docs/en/RUN_SAMPLE.md](docs/en/RUN_SAMPLE.md) | Run the bundled SO-101 + GR00T sample |
+| [docs/en/PHYSAI_CLI.md](docs/en/PHYSAI_CLI.md) | CLI reference: commands, data management, build/run workflow internals |
+| [docs/en/PIPELINE_DEVELOP.md](docs/en/PIPELINE_DEVELOP.md) | Author your own pipeline: containers, entrypoint contracts, run configs |
+| [docs/en/PIPELINE_DESIGN.md](docs/en/PIPELINE_DESIGN.md) | Platform architecture and design rationale |
+| [docs/en/INFRA.md](docs/en/INFRA.md) | CDK stack layout, lifecycle scripts, deployment internals |
+| [docs/en/STATUS.md](docs/en/STATUS.md) | Phase 1 scope and implementation status |
 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | Code style and conventions across all workstreams |
 | [docs/TIMINGS.md](docs/TIMINGS.md) | Command timings and agent decision guide |
 | [README.md](README.md) | Project overview and quick start |
+
+Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + `.ja.md` suffix.
 
 ---
 
