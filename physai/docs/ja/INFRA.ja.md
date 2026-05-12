@@ -209,3 +209,35 @@ npx cdk deploy PhysaiClusterStack   # スクリプトを新しいハッシュプ
 ライフサイクルスクリプトはコンテンツハッシュ付きプレフィックス (例: `s3://bucket/lifecycle/<hash>/`) で S3 にデプロイされるため、スクリプトに変更があると `SourceS3Uri` が変わり、CloudFormation が `UpdateCluster` を呼び出します。これがないと、置換されたノードは以前のキャッシュ済みスクリプトを取得してしまいます。HyperPod はノード置換だけでは S3 から再取得を行いません。
 
 **注意**: コントローラーノードは `scontrol update ... state=fail` で置換できません。コントローラー上でライフサイクルをその場で再実行するには `run-lifecycle.sh --node <controller-hostname>` を使用します。
+
+### データバケット名が変わるときの既存デプロイ移行手順
+
+データバケット名のテンプレートは `<clusterName>-data-<account>-<region>` です。このテンプレートを変更する場合（例: サフィックスを追加する場合）、CFN はバケットを置換しようとしますが、`cdk deploy --all` を 1 回で完了できない 2 つの順序問題があります:
+
+1. **FSx Data Repository Association のパス競合。** DRA は FSx の `/raw` に紐づいており、FSx は同じ FileSystemPath に対して 2 つの DRA を許容しません。CFN 標準の「先に作成、後で削除」型の置換ではこのルールに違反します。
+2. **クロススタックエクスポートのロック。** PhysaiInfraStack はバケット Arn を IAM grant 経由で PhysaiClusterStack に渡すためエクスポートしていました。他のスタックがインポート中のエクスポートを CFN は更新できません。
+
+どちらかのエラーに遭遇したら、以下の手順で進めます:
+
+```bash
+# 1. FSx DRA を CFN の外で削除する（FSx のファイル本体は残す: --no-delete-data-in-file-system）。
+DRA_ID=$(aws fsx describe-data-repository-associations \
+  --filters Name=file-system-id,Values=<fs-id> \
+  --query 'Associations[?FileSystemPath==`/raw`].AssociationId' --output text)
+aws fsx delete-data-repository-association \
+  --association-id $DRA_ID --no-delete-data-in-file-system
+
+# 2. 先に ClusterStack をデプロイし、DataBucket.Arn のクロススタックインポートを外す。
+#    --exclusively を付けて InfraStack には触れさせない。
+npx cdk deploy PhysaiClusterStack --exclusively
+
+# 3. InfraStack をデプロイする（バケットがクリーンに置換され、新バケット上に DRA が再作成される）。
+npx cdk deploy PhysaiInfraStack
+
+# 4. 旧バケットの S3 オブジェクトを新バケットへ移行する。旧バケットは RETAIN
+#    されているのでデータは残りますが、クラスターからは切り離されます。
+aws s3 sync s3://<old-bucket>/raw/ s3://<new-bucket>/raw/
+aws s3 rb s3://<old-bucket> --force   # 同期完了を確認した後に実行
+```
+
+途中でデプロイが失敗してロールバック時に新バケットが孤立した場合（RETAIN により DELETE_SKIPPED となる）、再デプロイ前に `aws s3 rb s3://<orphan-bucket> --force` で削除してください。そうしないと、次の CFN バケット作成ステップが `AlreadyExists` で失敗します。

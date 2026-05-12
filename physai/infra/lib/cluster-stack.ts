@@ -22,7 +22,7 @@ export interface ClusterStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
   privateSubnet: ec2.ISubnet;
   clusterSg: ec2.SecurityGroup;
-  dataBucket: s3.Bucket;
+  dataBucketName: string;
   fsxFileSystem: fsx.CfnFileSystem;
   fsxDnsName: string;
   fsxMountName: string;
@@ -60,7 +60,7 @@ export class ClusterStack extends cdk.Stack {
       vpc,
       privateSubnet,
       clusterSg,
-      dataBucket,
+      dataBucketName,
       fsxDnsName,
       fsxMountName,
       dbEndpoint,
@@ -148,6 +148,11 @@ export class ClusterStack extends cdk.Stack {
       }),
     );
 
+    // Re-derive the data bucket by name rather than receiving it cross-stack.
+    // This avoids a CFN export of the bucket Arn that would lock the bucket
+    // against in-place updates from PhysaiInfraStack while ClusterStack is
+    // deployed.
+    const dataBucket = s3.Bucket.fromBucketName(this, 'DataBucketRef', dataBucketName);
     dataBucket.grantReadWrite(executionRole);
     lifecycleBucket.grantRead(executionRole);
 

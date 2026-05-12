@@ -9,13 +9,16 @@ import { Construct } from 'constructs';
 export interface InfraStackProps extends cdk.StackProps {
   clusterName: string;
   fsxCapacityGiB: number;
+  // Pre-composed bucket name (from app.ts), shared with PhysaiClusterStack.
+  // Passing the name as a plain string avoids the CDK cross-stack export of
+  // the bucket Arn that would lock the bucket against in-place updates.
+  dataBucketName: string;
 }
 
 export class InfraStack extends cdk.Stack {
   public readonly vpc: ec2.Vpc;
   public readonly privateSubnet: ec2.ISubnet;
   public readonly clusterSg: ec2.SecurityGroup;
-  public readonly dataBucket: s3.Bucket;
   public readonly fsxFileSystem: fsx.CfnFileSystem;
   public readonly fsxDnsName: string;
   public readonly fsxMountName: string;
@@ -25,8 +28,7 @@ export class InfraStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: InfraStackProps) {
     super(scope, id, props);
 
-    const { clusterName, fsxCapacityGiB } = props;
-    const account = cdk.Stack.of(this).account;
+    const { clusterName, fsxCapacityGiB, dataBucketName } = props;
 
     // ── VPC ──
 
@@ -65,8 +67,8 @@ export class InfraStack extends cdk.Stack {
 
     // ── S3 Data Bucket ──
 
-    this.dataBucket = new s3.Bucket(this, 'DataBucket', {
-      bucketName: `${clusterName}-data-${account}-${this.region}`,
+    const dataBucket = new s3.Bucket(this, 'DataBucket', {
+      bucketName: dataBucketName,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     });
@@ -95,7 +97,7 @@ export class InfraStack extends cdk.Stack {
     new fsx.CfnDataRepositoryAssociation(this, 'FsxDra', {
       fileSystemId: this.fsxFileSystem.ref,
       fileSystemPath: '/raw',
-      dataRepositoryPath: `s3://${this.dataBucket.bucketName}/raw`,
+      dataRepositoryPath: `s3://${dataBucket.bucketName}/raw`,
       s3: {
         autoImportPolicy: { events: ['NEW', 'CHANGED', 'DELETED'] },
       },
@@ -139,7 +141,7 @@ export class InfraStack extends cdk.Stack {
     this.dbEndpoint = dbInstance.dbInstanceEndpointAddress;
 
     new cdk.CfnOutput(this, 'DataBucketName', {
-      value: this.dataBucket.bucketName,
+      value: dataBucketName,
       description:
         'S3 bucket for raw data (upload to s3://<bucket>/raw/ to auto-import to /fsx/raw/)',
       exportName: `${this.stackName}-DataBucketName`,

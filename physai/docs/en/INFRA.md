@@ -226,3 +226,36 @@ The lifecycle scripts are deployed to S3 under a content-hashed prefix (e.g.,
 scripts — HyperPod does not re-fetch from S3 on node replacement alone.
 
 **Note**: The controller node cannot be replaced via `scontrol update ... state=fail`. Use `run-lifecycle.sh --node <controller-hostname>` to re-run the lifecycle on the controller in place.
+
+### Migrating an existing deployment when the data bucket name changes
+
+The data bucket name is `<clusterName>-data-<account>-<region>`. If you ever change this template (e.g. to add a suffix), CFN will try to replace the bucket — and there are two ordering issues that block a single `cdk deploy --all`:
+
+1. **FSx Data Repository Association path overlap.** The DRA is bound to `/raw` on FSx, and FSx forbids two DRAs on the same FileSystemPath. CFN's standard "create-then-delete" replacement violates that rule.
+2. **Cross-stack export lock.** PhysaiInfraStack used to export the bucket Arn for PhysaiClusterStack to consume via IAM grants. CFN refuses to update an export while another stack imports it.
+
+If you're hitting either error, follow this sequence:
+
+```bash
+# 1. Drop the FSx DRA out-of-band (the FSx contents stay; --no-delete-data-in-file-system).
+DRA_ID=$(aws fsx describe-data-repository-associations \
+  --filters Name=file-system-id,Values=<fs-id> \
+  --query 'Associations[?FileSystemPath==`/raw`].AssociationId' --output text)
+aws fsx delete-data-repository-association \
+  --association-id $DRA_ID --no-delete-data-in-file-system
+
+# 2. Deploy ClusterStack first (drops the cross-stack import of DataBucket.Arn).
+#    --exclusively prevents CDK from also touching InfraStack here.
+npx cdk deploy PhysaiClusterStack --exclusively
+
+# 3. Deploy InfraStack (replaces the bucket cleanly, recreates the DRA on the new bucket).
+npx cdk deploy PhysaiInfraStack
+
+# 4. Migrate any S3 objects from the old bucket to the new one. The old
+#    bucket is RETAIN'd, so its data is preserved but no longer attached to
+#    the cluster.
+aws s3 sync s3://<old-bucket>/raw/ s3://<new-bucket>/raw/
+aws s3 rb s3://<old-bucket> --force   # only after confirming the sync
+```
+
+If a deploy attempt fails partway through and leaves an orphaned new bucket (RETAIN'd via DELETE_SKIPPED on rollback), delete it with `aws s3 rb s3://<orphan-bucket> --force` before retrying — otherwise CFN's next bucket-create step fails with `AlreadyExists`.
