@@ -156,7 +156,8 @@ PhysaiInfraStack に依存します。
 | `install_enroot_pyxis.sh` | 全ノード | Enroot + Pyxis + Vulkan ICD フック + NGX パッチをインストールします |
 | `configure_slurm_cgroup.sh` | コントローラー + Compute | `scancel` 用の cgroup プロセストラッキングを有効化します |
 | `register_slurm_features.sh` | Compute | ノードの Slurm `Feature`（例: `l40s`）を `scontrol update` で自己登録する systemd `.service` + `.path` ユニットをインストールします。`.path` ユニットは `/var/spool/slurmd/conf-cache/slurm.conf`（configless モードで `scontrol reconfigure` ごとに slurmd が書き直す）を監視するため、features は reconfigure の後に再適用されます — `scontrol update` で設定した features は slurmctld のメモリ上で reconfigure を生き延びないため必要です。 |
-| `install_xorg.sh` | Compute (GPU のみ) | IsaacSim ヘッドレスレンダリング用 Xorg をインストールします |
+| `install_gdm.sh` | Compute (GPU のみ) | GNOME デスクトップ + GDM3（`ubuntu` ユーザーで自動ログイン）、カーネルモジュールにバージョンを揃えた NVIDIA Xorg ドライバ、ヘッドレス向け `xorg.conf`（仮想ディスプレイヘッド `DFP-{0..3}`）をインストールします。この Xorg セッションが IsaacSim のレンダリング先であり、`--visual` 評価では DCV がここをキャプチャします。 |
+| `install_dcv.sh` | Compute (GPU のみ) | NICE DCV サーバーと、`ubuntu` 所有の永続的な `console` セッションをインストールします（ビジュアル評価用）。詳細は [PIPELINE_DESIGN.ja.md §5](PIPELINE_DESIGN.ja.md#5-dcv-によるビジュアル評価) を参照してください。 |
 
 ### ライフサイクルスクリプトの作成: HyperPod のタイミング上の注意点
 

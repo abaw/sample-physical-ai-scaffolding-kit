@@ -50,6 +50,12 @@ def main():
         "--visual", action="store_true", help="Render eval to DCV display"
     )
     p_run.add_argument(
+        "--visual-timeout",
+        type=int,
+        default=3600,
+        help="Seconds to wait for DCV slot (default: 3600). Only used with --visual.",
+    )
+    p_run.add_argument(
         "--model-config-root",
         action="append",
         default=[],
@@ -85,6 +91,12 @@ def main():
         "--checkpoint", required=True, help="Checkpoint name on cluster"
     )
     p_eval.add_argument("--visual", action="store_true", help="Render to DCV display")
+    p_eval.add_argument(
+        "--visual-timeout",
+        type=int,
+        default=3600,
+        help="Seconds to wait for DCV slot (default: 3600). Only used with --visual.",
+    )
     p_eval.add_argument("--eval-rounds", type=int, help="Override stages.eval.rounds")
     p_eval.add_argument(
         "--model-config-root",
@@ -216,6 +228,7 @@ def main():
             max_steps=args.max_steps,
             eval_rounds=args.eval_rounds,
             visual=args.visual,
+            visual_timeout=args.visual_timeout,
             stream=not args.no_stream,
         )
     elif args.command == "train":
@@ -241,6 +254,7 @@ def main():
             model_config_roots=roots,
             eval_rounds=args.eval_rounds,
             visual=args.visual,
+            visual_timeout=args.visual_timeout,
             stream=not args.no_stream,
         )
     elif args.command == "convert":

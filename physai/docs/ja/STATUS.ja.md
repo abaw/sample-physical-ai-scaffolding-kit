@@ -23,7 +23,7 @@ Phase 1 の現在の状態：完了した内容と今後の予定です。本ド
 
 **IsaacSim に関する注意事項**:
 - `leisaac-runtime` には `50-warmup.sh` セットアップフックが含まれており、ビルド中に IsaacSim のシェーダキャッシュをウォームアップします（[上流の warmup.sh](https://github.com/isaac-sim/IsaacSim/blob/main/source/scripts/warmup.sh) と同等です）。pip インストール版の IsaacSim はスタンドアロン配布用レイアウトを前提とする `kit-gcov` しか同梱しないため、`kit` バイナリの代わりに `kit_app.py` を使用します。
-- 評価ジョブには `DISPLAY=:0` と `/tmp/.X11-unix` のマウントが必要です。IsaacSim はヘッドレスモードでも GLFW/GLX を必要とします。GPU ノードにはライフサイクルスクリプト（`install_xorg.sh`）で Xorg がインストールされます。
+- 評価ジョブには `DISPLAY=:0` と `/tmp/.X11-unix` のマウントが必要です。IsaacSim はヘッドレスモードでも GLFW/GLX を必要とします。GPU ノードでは GDM3 が `ubuntu` で自動ログインしており（ライフサイクル: `install_gdm.sh`）、GDM が NVIDIA ドライバとヘッドレス向け `DFP-{0..3}` 仮想ディスプレイヘッドで Xorg を所有します。IsaacSim はこの Xorg にレンダリングし、`--visual` 評価では DCV がそれをキャプチャします。
 - `policy_inference.py` の出力を `tee` 経由でキャプチャするには `PYTHONUNBUFFERED=1` が必要です。
 
 ### run_config.yaml
@@ -313,6 +313,13 @@ LeIsaac 以外の変更:
 - RDS MariaDB 経由の Slurm アカウンティング（`sacct`）
 - `physai logs <job-id>` で Ctrl-C デタッチ付きストリーミング
 
+#### ビジュアル評価（DCV）
+
+- `physai eval --visual` は GPU ノードの `ubuntu` アカウントにワンタイムパスワードを設定し、SSM ポートフォワードコマンド + ブラウザ URL + 認証情報を表示します。ジョブ終了時にはパスワードをランダムな推測不可能な値にローテートします。永続的な `console` DCV セッションと GDM ベースの Xorg は、ライフサイクルスクリプト（`install_gdm.sh` + `install_dcv.sh`）によって起動時にプロビジョニングされます
+- ノードあたりの排他制御は `/fsx/physai/dcv-claims/<host>.lock` への POSIX `flock` で行います — 2 つ目の `--visual` ジョブは最初のジョブが解放するまで（`--visual-timeout`、デフォルト 1 時間まで）ブロックされます。ルーティングは GRES ではなく Slurm の `--constraint=...&dcv` を使用します
+- セットアップ／ティアダウンは sbatch ホストコンテキスト（コンテナ実行の前後）で行うため、`eval.sh` は変更不要です
+- `physai doctor` は開発者マシンに `session-manager-plugin` があるかチェックします
+
 ### 未実装
 
 #### 次の優先事項（フルパイプラインのブロッカー）
@@ -322,10 +329,6 @@ LeIsaac 以外の変更:
 - `train.sh` 出力契約 — `train_summary.json`（最終ロス、ステップ数、チェックポイントパス）を定義し、`register` がトレーニング出力を利用できるようにします。現在 `train.sh` はモデルチェックポイントのみを書き出します
 - ステージ出力の S3 エクスポート — `/fsx/` 配下のデータセット、チェックポイント、評価結果を各ステージ終了時に `s3://<data-bucket>/{datasets,checkpoints,results}/` に公開します。パイプラインオーケストレータが明示的にエクスポートを実行します（例: `aws s3 cp`）。FSx の data-repository export は使用しません。`/fsx/` はワーキングストレージとしてのみ扱います
 - CDK での MLflow トラッキングサーバ
-
-#### 計画中
-
-- DCV ビジュアル評価（`physai eval --visual`）— CLI は現在 `--visual` を受け付けて `eval.sh` に渡します（`--headless` を省略して Isaac Sim がレンダリングします）が、周辺の DCV セッション管理（GPU ノードでの DCV セッション割り当て、SSM ポートフォワードコマンドの表示、ジョブ終了時のクリーンアップ）はまだ自動化されていません。
 
 #### ストレッチ
 

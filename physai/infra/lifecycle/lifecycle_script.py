@@ -129,7 +129,8 @@ def main():
 
     # 6. Compute-node-only scripts (self-guarded)
     run("./register_slurm_features.sh", env=env)
-    run("./install_xorg.sh", env=env)
+    run("./install_gdm.sh", env=env)
+    run("./install_dcv.sh", env=env)
 
     print("Lifecycle setup complete")
 

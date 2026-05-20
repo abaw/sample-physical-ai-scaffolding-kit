@@ -71,7 +71,7 @@ These scripts run on HyperPod nodes during cluster creation, orchestrated by
 - Scripts MUST be idempotent and safe to re-run — `run-lifecycle.sh` re-runs them on existing nodes; each re-run should hit an "already installed" fast path when the node is already configured
 - Scripts run as root during node provisioning — no `.root.sh` suffix needed
 - No shellcheck configured in CI — review shell changes manually (known gap). Local `shellcheck -x infra/lifecycle/*.sh` should be clean
-- To apply changes to a running cluster, use `infra/scripts/run-lifecycle.sh` (preferred — works on all node types including the controller). Replacing a node via `scontrol update ... state=fail` also works for workers/login but requires `cdk deploy` first to update the S3 copy. See [`docs/en/DEPLOYMENT.md`](en/DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster-advanced).
+- To apply changes to a running cluster, use `infra/scripts/run-lifecycle.sh` (preferred — works on all node types including the controller). Replacing a node via `scontrol update ... state=fail` also works for workers/login but requires `cdk deploy` first to update the S3 copy. See [`docs/en/DEPLOYMENT.md`](en/DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster).
 
 ---
 

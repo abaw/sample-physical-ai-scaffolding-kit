@@ -157,6 +157,7 @@ def test_run_full(cli_env, monkeypatch):
         "max_steps": 500,
         "eval_rounds": 10,
         "visual": True,
+        "visual_timeout": 3600,
         "stream": False,
     }
 

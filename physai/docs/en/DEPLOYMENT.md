@@ -135,19 +135,39 @@ FSx layout (shared mount at `/fsx/` on all cluster nodes):
 └── physai/         # CLI working state (builds, logs, sync directories)
 ```
 
-### Applying Lifecycle Script Changes to a Running Cluster (Advanced)
+> **Already have a cluster running?** A fresh `cdk deploy` provisions nodes
+> with the current lifecycle scripts, but an **existing** cluster does not pick
+> up lifecycle changes on its own. Any time you pull new changes and want to
+> try them on a cluster you already have, see
+> [Applying Lifecycle Script Changes to a Running Cluster](#applying-lifecycle-script-changes-to-a-running-cluster)
+> below first.
+
+### Applying Lifecycle Script Changes to a Running Cluster
+
+> **Rule of thumb — always do this after pulling new changes.** HyperPod runs
+> the lifecycle scripts under `infra/lifecycle/` **only once, at initial node
+> provisioning.** Any time you pull new changes (or edit a lifecycle script)
+> and want to try them on a cluster you **already have running**, you must
+> first either re-apply the scripts to the existing nodes (below) **or** stand
+> up a fresh cluster. Existing nodes do **not** pick up new scripts on their
+> own — the cluster has already moved past the provisioning step.
+>
+> This bites hardest with features whose setup lives entirely in a lifecycle
+> script. For example, `physai eval --visual` needs the DCV server *and* the
+> `/fsx/physai/dcv-claims/` lock directory, both created by lifecycle scripts;
+> on a cluster created before visual eval landed it fails with errors like
+> `…/dcv-claims/<host>.lock: No such file or directory` until you re-run them.
 
 Lifecycle scripts under `infra/lifecycle/` run when HyperPod first provisions
-a node. If you edit them (or pull upstream changes), **existing nodes don't
-automatically pick up the new scripts** — HyperPod has already moved past the
-"initial provisioning" step.
-
-There are two things you may want:
+a node. After pulling changes there are two things you may want:
 
 1. **Apply the new scripts to existing nodes right now.**
 2. **Make sure future node replacements / scale-outs also use the new scripts.**
 
-Do either or both depending on your need.
+Do either or both depending on your need. The fastest correct default is
+`infra/scripts/run-lifecycle.sh --all` (re-run in place — idempotent, finishes
+in seconds) followed by `npx cdk deploy PhysaiClusterStack` (so future nodes
+match).
 
 #### Re-run scripts in place
 

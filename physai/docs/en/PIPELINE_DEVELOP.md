@@ -228,7 +228,7 @@ your_train_command \
 | `<model_config_dir>` | Resolved model config directory. |
 | `<output_dir>` | Empty per-run directory. Write `metrics.json` (required) and optionally `eval.log`. |
 | `<rounds>` | Number of evaluation rounds, from `stages.eval.rounds` or `--eval-rounds`. |
-| `--visual` | If present, render to the attached virtual display (DCV). Otherwise use headless mode. |
+| `--visual` | If present, render to the attached virtual display (DCV). Otherwise use headless mode. Visual eval is per-GPU-node exclusive — the pipeline acquires a POSIX `flock` on the node's DCV-claim file, so a second `--visual` job blocks (up to `--visual-timeout`, default 1 hour) until the first releases. |
 | **Exit code** | Non-zero on evaluation failure. |
 
 **Required output — `metrics.json`:**
@@ -666,28 +666,11 @@ When augmentation is enabled, the orchestrator runs augmentation and conversion 
 
 ### 7.4 Visual evaluation via DCV
 
-`physai eval --visual` streams a rendered simulation viewport to the developer's browser via NICE DCV:
+`physai eval --visual` streams a rendered simulation viewport to the developer's browser via NICE DCV. The pipeline adds `dcv` to the eval stage's Slurm `--constraint` so the job lands on a DCV-capable GPU node, acquires a POSIX `flock` on `/fsx/physai/dcv-claims/<host>.lock` for per-node exclusivity, sets a one-time password on the worker's `ubuntu` account, and prints the SSM port-forward command, browser URL, and credentials. Then `eval.sh --visual` runs IsaacSim non-headless against Xorg `:0`, which DCV captures and streams to port 8443.
 
-```bash
-$ physai eval --visual --config so101_pickorange_gr00t-n1.6.yaml \
-    --checkpoint checkpoints/run-42/checkpoint-10000
+DCV server, GDM3 (auto-login as `ubuntu`), and the persistent `console` session are all installed on GPU workers via HyperPod lifecycle scripts. SSM port forwarding requires no security group changes. See [PIPELINE_DESIGN.md §5](PIPELINE_DESIGN.md#5-visual-evaluation-via-dcv) for the architecture.
 
-Submitted job 456
-Allocating GPU node...          gpu-worker-3 (i-0abc123def)
-Starting DCV session...         physai-eval-456
-
-Connect to the DCV session:
-  aws ssm start-session --target i-0abc123def \
-    --document-name AWS-StartPortForwardingSession \
-    --parameters '{"portNumber":["8443"],"localPortNumber":["8443"]}'
-
-Then open: https://localhost:8443
-Username: ubuntu          Password: xxxxxxx
-
-Streaming eval log (Ctrl-C to detach)...
-```
-
-The pipeline submits a Slurm job with `--gres=gpu:1,dcv:1`, creates a DCV session, prints the SSM port-forwarding command, and runs `eval.sh` with `--visual`. DCV server is installed on GPU workers via HyperPod lifecycle scripts. SSM port forwarding requires no security group changes.
+> **Existing cluster?** Because all of that setup (plus the `/fsx/physai/dcv-claims/` lock directory) lives in lifecycle scripts, `--visual` only works on nodes provisioned *after* the feature landed. If you pulled this in on a cluster you already had running and see `…/dcv-claims/<host>.lock: No such file or directory` (or DCV simply isn't installed), re-run the lifecycle scripts first: `infra/scripts/run-lifecycle.sh --all`. See [DEPLOYMENT.md → Applying Lifecycle Script Changes to a Running Cluster](DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster).
 
 ### 7.5 Experiment tracking (MLflow) — planned, not yet implemented
 

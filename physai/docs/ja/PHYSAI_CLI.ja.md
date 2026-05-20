@@ -226,10 +226,10 @@ physai rm datasets foo -f   # 確認プロンプトをスキップ
 
 ```bash
 physai build <container-folder> [--rebuild] [-n|--no-stream] [--host HOST]
-physai run   --config <local-yaml> [--from STAGE] [--to STAGE] [--raw NAME] [--dataset NAME] [--checkpoint NAME] [--max-steps N] [--eval-rounds N] [--visual] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
+physai run   --config <local-yaml> [--from STAGE] [--to STAGE] [--raw NAME] [--dataset NAME] [--checkpoint NAME] [--max-steps N] [--eval-rounds N] [--visual] [--visual-timeout SECONDS] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
 physai convert --config <local-yaml> --raw <name> [--dataset <name>] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
 physai train --config <local-yaml> --dataset <name> [--max-steps N] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
-physai eval  --config <local-yaml> --checkpoint <name> [--eval-rounds N] [--visual] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
+physai eval  --config <local-yaml> --checkpoint <name> [--eval-rounds N] [--visual] [--visual-timeout SECONDS] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
 ```
 
 #### 3.3.1. パスの解決
@@ -396,7 +396,27 @@ physai train --config examples/so101-gr00t/configs/so101_liftcube_gr00t-n1.6.yam
 # eval のみ（`run --from eval --to eval` のショートカット）
 physai eval --config examples/so101-gr00t/configs/so101_liftcube_gr00t-n1.6.yaml \
             --checkpoint gr00t-n1.6-liftcube-30k
+
+# ビジュアル評価 — レンダリングされたシミュレーションを DCV 経由でブラウザにストリーミング
+physai eval --visual --config examples/so101-gr00t/configs/so101_liftcube_gr00t-n1.6.yaml \
+            --checkpoint gr00t-n1.6-liftcube-30k
+# 同じノードで別の --visual ジョブが実行中の場合に DCV スロットの解放をどれだけ待つかは
+# --visual-timeout SECONDS（デフォルト 3600）で上書きできます。接続情報のブロックが
+# 表示されたら：
+#   1. 別ターミナルで表示された aws ssm start-session コマンドを実行
+#   2. 表示されたブラウザ URL を開き、自己署名証明書を承認
+#   3. ユーザー名 `ubuntu`、接続情報のブロックに表示された OTP でサインイン
+#   4. 終了したら `physai cancel <job-id>` でセッションを閉じる
 ```
+
+> **既存クラスターでの `--visual`：** ビジュアル評価のサーバー側セットアップ
+> （DCV と `/fsx/physai/dcv-claims/` ロックディレクトリ）は、ノードのプロビジョ
+> ニング時にライフサイクルスクリプトによってインストールされます。クラスターが
+> この機能より前に作成されていて、ジョブが `…/dcv-claims/<host>.lock: No such
+> file or directory` で失敗する場合は、`infra/scripts/run-lifecycle.sh --all`
+> でライフサイクルスクリプトを一度再実行してから
+> （[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md#稼働中のクラスターへのライフサイクルスクリプト変更の適用) を参照）、
+> 再投入してください。
 
 ##### 3.3.4.1 コマンドの処理手順
 

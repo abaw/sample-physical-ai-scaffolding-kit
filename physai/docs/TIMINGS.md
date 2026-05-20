@@ -31,6 +31,8 @@ Reference for every command an agent might run. Check here before executing anyt
 | ⚠️ `npx cdk deploy --all` | **~20 min** | AWS | yes | **NO** — creates/modifies AWS resources |
 | ⚠️ `physai build <container>` | **10–30+ min** | HyperPod cluster | yes (without `-n`) | **NO** — submits Slurm job |
 | ⚠️ `physai run --config ...` | **hours** | HyperPod cluster | yes (without `-n`) | **NO** — submits training/eval pipeline |
+| ⚠️ `physai eval --visual ...` | **minutes–hours** | HyperPod cluster | yes (without `-n`) | **NO** — submits an eval job and holds a DCV slot on a GPU node |
+| `aws ssm start-session ... AWS-StartPortForwardingSession` (DCV tunnel) | runs until killed | local | yes (foreground) | **ASK** — long-lived tunnel; run in background and stop it when done |
 
 ---
 
@@ -53,6 +55,8 @@ repo root (`physai/`) unless they include an explicit `cd`.
   → ⚠️ **STOP.** Ask the user. `physai build` submits a Slurm job on the cluster.
 - **Need to run a pipeline?**
   → ⚠️ **STOP.** Ask the user. `physai run` can take hours.
+- **Need to test visual evaluation (`physai eval --visual`)?**
+  → ⚠️ **STOP.** Ask the user. Submits an eval Slurm job AND holds the GPU node's DCV flock until the job ends. Browser verification needs a live SSM tunnel — run it with `run_in_background` and stop the task when done so you don't leave it open.
 - **Need to re-run lifecycle scripts on the cluster?**
   → ⚠️ **STOP.** Ask the user. `run-lifecycle.sh` is idempotent and safe, but it modifies live node state. Use `--dry-run` freely to preview.
 

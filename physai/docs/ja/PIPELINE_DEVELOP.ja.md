@@ -228,7 +228,7 @@ your_train_command \
 | `<model_config_dir>` | 解決済みモデル設定ディレクトリです。 |
 | `<output_dir>` | 実行ごとに作成される空ディレクトリです。`metrics.json`（必須）とオプションで `eval.log` を書き込みます。 |
 | `<rounds>` | 評価ラウンド数です。`stages.eval.rounds` または `--eval-rounds` から取得されます。 |
-| `--visual` | 指定された場合、接続されたバーチャルディスプレイ (DCV) にレンダリングします。指定なしの場合はヘッドレスモードです。 |
+| `--visual` | 指定された場合、接続されたバーチャルディスプレイ (DCV) にレンダリングします。指定なしの場合はヘッドレスモードです。ビジュアル評価は GPU ノードあたり排他的です — パイプラインがノードの DCV クレームファイルに POSIX `flock` を取得するため、2 つ目の `--visual` ジョブは最初のジョブが解放するまで（`--visual-timeout`、デフォルト 1 時間まで）ブロックされます。 |
 | **終了コード** | 評価失敗時に非ゼロとなります。 |
 
 **必須出力 — `metrics.json`:**
@@ -666,28 +666,11 @@ JOB3=$(sbatch --parsable --job-name=physai/run/$RUN_ID/register --dependency=aft
 
 ### 7.4 DCV によるビジュアル評価
 
-`physai eval --visual` は、レンダリングされたシミュレーションビューポートを NICE DCV 経由で開発者のブラウザにストリーミングします：
+`physai eval --visual` は、レンダリングされたシミュレーションビューポートを NICE DCV 経由で開発者のブラウザにストリーミングします。パイプラインは eval ステージの Slurm `--constraint` に `dcv` を追加して DCV 対応の GPU ノードに着地させ、ノードごとの排他制御のために `/fsx/physai/dcv-claims/<host>.lock` に POSIX `flock` を取得し、ワーカーの `ubuntu` アカウントにワンタイムパスワードを設定して、SSM ポートフォワードコマンド、ブラウザ URL、認証情報を表示します。その後、`eval.sh --visual` が IsaacSim を非ヘッドレスで Xorg `:0` に対して実行し、DCV がそれをキャプチャしてポート 8443 にストリーミングします。
 
-```bash
-$ physai eval --visual --config so101_pickorange_gr00t-n1.6.yaml \
-    --checkpoint checkpoints/run-42/checkpoint-10000
+DCV サーバー、GDM3（`ubuntu` で自動ログイン）、永続的な `console` セッションはすべて HyperPod ライフサイクルスクリプトで GPU ワーカーにインストールされます。SSM ポートフォワーディングにセキュリティグループの変更は不要です。アーキテクチャの詳細は [PIPELINE_DESIGN.ja.md §5](PIPELINE_DESIGN.ja.md#5-dcv-によるビジュアル評価) を参照してください。
 
-Submitted job 456
-Allocating GPU node...          gpu-worker-3 (i-0abc123def)
-Starting DCV session...         physai-eval-456
-
-Connect to the DCV session:
-  aws ssm start-session --target i-0abc123def \
-    --document-name AWS-StartPortForwardingSession \
-    --parameters '{"portNumber":["8443"],"localPortNumber":["8443"]}'
-
-Then open: https://localhost:8443
-Username: ubuntu          Password: xxxxxxx
-
-Streaming eval log (Ctrl-C to detach)...
-```
-
-パイプラインは `--gres=gpu:1,dcv:1` で Slurm ジョブをサブミットし、DCV セッションを作成し、SSM ポートフォワーディングコマンドを表示して、`eval.sh` を `--visual` 付きで実行します。DCV サーバーは HyperPod ライフサイクルスクリプトで GPU ワーカーにインストールされます。SSM ポートフォワーディングにセキュリティグループの変更は不要です。
+> **既存のクラスターの場合：** これらのセットアップ（および `/fsx/physai/dcv-claims/` ロックディレクトリ）はすべてライフサイクルスクリプト内にあるため、`--visual` は機能追加*後*にプロビジョニングされたノードでのみ動作します。すでに稼働中のクラスターにこの変更を取り込んで `…/dcv-claims/<host>.lock: No such file or directory` が表示される（または DCV がそもそもインストールされていない）場合は、まずライフサイクルスクリプトを再実行してください：`infra/scripts/run-lifecycle.sh --all`。[DEPLOYMENT.ja.md → 稼働中のクラスターへのライフサイクルスクリプト変更の適用](DEPLOYMENT.ja.md#稼働中のクラスターへのライフサイクルスクリプト変更の適用) を参照してください。
 
 ## 8. データセットフォーマットリファレンス
 

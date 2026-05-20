@@ -5,7 +5,7 @@ set -ex
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type controller
 
-for d in raw datasets checkpoints evaluations physai; do
+for d in raw datasets checkpoints evaluations physai physai/dcv-claims; do
     mkdir -p /fsx/${d}
     chmod 0777 /fsx/${d}
 done

@@ -247,10 +247,10 @@ These commands are used to manage the pipline.
 
 ```bash
 physai build   <container-folder> [--rebuild] [-n|--no-stream] [--host HOST]
-physai run     --config <local-yaml> [--from STAGE] [--to STAGE] [--raw NAME] [--dataset NAME] [--checkpoint NAME] [--max-steps N] [--eval-rounds N] [--visual] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
+physai run     --config <local-yaml> [--from STAGE] [--to STAGE] [--raw NAME] [--dataset NAME] [--checkpoint NAME] [--max-steps N] [--eval-rounds N] [--visual] [--visual-timeout SECONDS] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
 physai convert --config <local-yaml> --raw <name> [--dataset <name>] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
 physai train   --config <local-yaml> --dataset <name> [--max-steps N] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
-physai eval    --config <local-yaml> --checkpoint <name> [--eval-rounds N] [--visual] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
+physai eval    --config <local-yaml> --checkpoint <name> [--eval-rounds N] [--visual] [--visual-timeout SECONDS] [--model-config-root PATH] [-n|--no-stream] [--host HOST]
 ```
 
 `physai run` executes the stages listed in `pipeline.stages` from the config. `--from`/`--to` narrow that list to a contiguous subrange. `physai convert`, `physai train`, and `physai eval` are shortcuts for single-stage runs.
@@ -433,7 +433,26 @@ physai train --config examples/so101-gr00t/configs/so101_liftcube_gr00t-n1.6.yam
 # Just eval (shortcut for `run --from eval --to eval`)
 physai eval --config examples/so101-gr00t/configs/so101_liftcube_gr00t-n1.6.yaml \
             --checkpoint gr00t-n1.6-liftcube-30k
+
+# Visual eval — streams rendered simulation to browser via DCV
+physai eval --visual --config examples/so101-gr00t/configs/so101_liftcube_gr00t-n1.6.yaml \
+            --checkpoint gr00t-n1.6-liftcube-30k
+# Add --visual-timeout SECONDS (default 3600) to override how long the job
+# waits for a free DCV slot when another --visual job is currently running on
+# the same node. After the connect block prints:
+#   1. Open a second terminal and run the aws ssm start-session command shown
+#   2. Open the browser URL, accept the self-signed cert
+#   3. Sign in with username `ubuntu` and the OTP shown in the connect block
+#   4. `physai cancel <job-id>` to end the session when done
 ```
+
+> **`--visual` on a pre-existing cluster:** visual eval's server-side setup
+> (DCV + the `/fsx/physai/dcv-claims/` lock directory) is installed by
+> lifecycle scripts at node provisioning. If your cluster predates the feature
+> and the job fails with `…/dcv-claims/<host>.lock: No such file or directory`,
+> re-run the lifecycle scripts once with `infra/scripts/run-lifecycle.sh --all`
+> (see [DEPLOYMENT.md](DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster)),
+> then resubmit.
 
 ##### 3.3.4.1 Steps in the command
 

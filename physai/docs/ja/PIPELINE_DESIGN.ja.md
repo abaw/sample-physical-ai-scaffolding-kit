@@ -133,9 +133,7 @@ JOB3=$(sbatch --parsable --job-name=physai/run/$RUN_ID/eval     --dependency=aft
 
 データ拡張が有効な場合、オーケストレーターは拡張と変換を同一 GPU ノード上の単一 Slurm ジョブとして実行します。拡張された HDF5 はローカル NVMe (`/fsx` ではなく) に書き込まれ、変換はローカル NVMe から読み取って `/fsx` に書き込みます。拡張された HDF5 (600GB 以上になる可能性あり) は共有ストレージに触れることなく、ジョブ終了時に自動的にクリーンアップされます。
 
-## 5. DCV によるビジュアル評価 — 部分実装
-
-CLI は `--visual` を受け付けて `eval.sh` に渡します（`eval.sh` は `--headless` を外して Isaac Sim をレンダリングさせます）が、その周辺のセッション管理 — GPU ノードでの DCV セッション割り当て、SSM ポートフォワードコマンドの出力、ジョブ終了時のクリーンアップ — はまだ自動化されていません。下記のエンドツーエンド UX が目標となります。
+## 5. DCV によるビジュアル評価
 
 `physai eval --visual` は、NICE DCV を介して開発者のブラウザにレンダリングされたシミュレーションビューポートをストリーミングします：
 
@@ -143,22 +141,60 @@ CLI は `--visual` を受け付けて `eval.sh` に渡します（`eval.sh` は 
 $ physai eval --visual --config examples/so101-gr00t/configs/so101_pickorange_gr00t-n1.6.yaml \
   --checkpoint run-20260430-011618
 
-Submitted job 456
-Allocating GPU node...          gpu-worker-3 (i-0abc123def)
-Starting DCV session...         physai-eval-456
+Submitted 1 stage(s): eval
+  Run ID:     run-20260515-030000
+  Reconnect:  physai logs 123
 
-Connect to the DCV session:
-  aws ssm start-session --target i-0abc123def \
-    --document-name AWS-StartPortForwardingSession \
-    --parameters '{"portNumber":["8443"],"localPortNumber":["8443"]}'
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Visual evaluation is ready on node ip-10-0-12-47.
 
-Then open: https://localhost:8443
-Username: ubuntu          Password: xxxxxxx
+ 1) In a second terminal, open the SSM tunnel and KEEP IT RUNNING:
 
-Streaming eval log (Ctrl-C to detach)...
+    aws ssm start-session \
+      --target sagemaker-cluster:p5bbuyk3t9ag_gpu-workers-i-09fc45686023bcdce \
+      --document-name AWS-StartPortForwardingSession \
+      --parameters '{"portNumber":["8443"],"localPortNumber":["8443"]}' \
+      --region us-west-2
+
+ 2) Open in your browser:
+
+    https://localhost:8443/#console
+
+ 3) Accept the self-signed cert on first connect.
+
+ 4) Sign in with:
+
+    Username: ubuntu
+    Password: xK9mP2qL7nR4vT8w
+
+ Session closes automatically when the job ends (`physai cancel 123`).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[eval] round 1/20 starting...
 ```
 
-パイプラインは `--gres=gpu:1,dcv:1` で Slurm ジョブを投入し、DCV セッションを作成、SSM ポートフォワーディングコマンドを出力し、`eval.sh` を `--visual` 付きで実行します。DCV サーバーは HyperPod ライフサイクルスクリプトを通じて GPU ワーカーにインストールされます。SSM ポートフォワーディングはセキュリティグループの変更を必要としません。
+### 仕組み
+
+DCV の `console` セッションは永続的です — `dcvserver` が起動時に自動作成し、GDM3 が `ubuntu` ユーザーのグラフィカル PAM セッション（自動ログイン）として立ち上げる Xorg にアタッチされます。ジョブごとのセットアップでは、`ubuntu` の PAM パスワードを新しい OTP にローテートして接続情報を表示するだけです。
+
+1. eval ステージの sbatch は `--constraint` に `dcv` を追加します。これにより、Slurm は DCV が構成された GPU ノードにのみジョブをスケジュールします（`dcv` フィーチャは GPU タイプ（例: `l40s`）と並んで `register_slurm_features.sh` が登録します）。
+2. `srun` の前に、sbatch は `/fsx/physai/dcv-claims/<host>.lock` に POSIX `flock` を取得します（1 ノードあたり 1 ビジュアルセッション）。同じノードで 2 つ目の `--visual` ジョブが投入されると、最初のジョブが解放するまで（または `--visual-timeout`、デフォルト 1 時間まで）flock を待ちます。
+3. sbatch が `dcv_session_setup.sh` を source します:
+   - `/opt/ml/config/resource_config.json` と IMDSv2 から `sagemaker-cluster:<cluster-id>_<group>-<instance-id>` の SSM ターゲットを解決します。
+   - ワンタイムパスワードを生成し、`chpasswd` で `ubuntu` アカウントに設定します。
+   - 接続情報のフルブロック（SSM トンネルコマンド、ブラウザ URL、認証情報）を出力します。
+4. `srun --container-image=... eval.sh --visual` が IsaacSim を `--headless` なしで実行し、Xorg `:0` にレンダリングします。DCV が `:0` をキャプチャしてポート 8443 に配信します。
+5. 開発者は別のターミナルで SSM トンネルを実行し、URL を開いて自己署名証明書を承認、サインインします。
+6. ジョブ終了時（正常終了または `physai cancel`）、sbatch の `EXIT TERM` トラップが `dcv_session_teardown.sh` を実行し、`ubuntu` のパスワードをランダムな推測不可能な値にローテートします。`console` セッション自体は次のジョブのために起動したままで、新規ログインのみブロックされます。（既に接続済みのブラウザタブはユーザーが閉じるまでストリーミングを続けます。）sbatch が終了すると、カーネルが flock を自動的に解放します。
+
+### インフラストラクチャ
+
+- GPU ワーカーは **GDM3 + GNOME** を実行します（ライフサイクル: `install_gdm.sh`）。`ubuntu` で自動ログインし、画面ロックは dconf で無効化されています。GDM が NVIDIA ドライバとヘッドレス向けの `DFP-{0..3}` 仮想ディスプレイヘッドで Xorg を所有します — これはデータセンター GPU 向けにサポートされた構成です（AWS NICE DCV TAM Runbook 準拠）。IsaacSim はこの Xorg セッションにレンダリングします。
+- `dcvserver` は常駐 systemd サービスとして実行されます（ライフサイクル: `install_dcv.sh`）。`gdm3` の後に順序付けられ、起動時に `ubuntu` 所有の `console` セッションを自動作成します。`nice-dcv-gl` は **インストールされません** — その GL インターセプト層は IsaacSim の CUDA/Vulkan パスと競合します。コンソールセッションには不要です。
+- Slurm の `dcv` フィーチャは GPU ノードで `register_slurm_features.sh` が登録します（GPU タイプフィーチャ `l40s` や `h100` などと並列に）。`--visual` 指定時、パイプラインは eval ステージの `--constraint` に `&dcv` を追加します。
+- DCV の排他制御は POSIX `flock(2)` advisory ロックを FSx Lustre 上のファイル（`/fsx/physai/dcv-claims/<host>.lock`）に取得して行います。ロックは sbatch 内でジョブのライフタイム中保持され、終了時にカーネルが解放するため、古いクレームのクリーンアップは不要です。FSx は `flock` でマウントしています（`localflock` ではありません）。
+- IAM ポリシーは EC2 自動ライセンスのために `arn:aws:s3:::dcv-license.<region>/*` への `s3:GetObject` を許可しています。
+- セキュリティグループの変更は不要です — SSM ポートフォワーディングはインバウンドルールを必要としません。
 
 ## 6. 実験トラッキング (MLflow) — 計画中、未実装
 
@@ -188,7 +224,7 @@ GPU および CPU パーティションは `infra/cdk.json` で設定された�
 - **置換**: worker／login ノードのみ対象。`npx cdk deploy PhysaiClusterStack`（新しいスクリプトを S3 にアップロード）の後、login ノードで `scontrol update node=X state=fail reason="Action:Replace"` を実行すると、HyperPod が新しいスクリプトでノードを再プロビジョニングします。
 - **クラスタースタック全体の再デプロイ**（最終手段）: `npx cdk destroy PhysaiClusterStack && npx cdk deploy PhysaiClusterStack`。遅く（約 25 分）、実行中のジョブは失われますが、安全です — `PhysaiClusterStack` は設計上ステートレスで、`PhysaiInfraStack`（FSx、RDS、S3 データバケット）は変更されません。上記 2 つでは回復できないほどクラスターが詰まっている場合や、ライフサイクルの tarball が `run-lifecycle.sh` が依存する SSM サイズ上限を超えた場合に使用します。
 
-`UpdateClusterSoftware` は AMI が変更された場合にのみ再プロビジョニングし、既存の AMI 上でライフサイクルスクリプトの再実行を強制するためには使用できません。詳細なワークフローは [DEPLOYMENT.ja.md](DEPLOYMENT.ja.md#稼働中のクラスターへのライフサイクルスクリプト変更の適用上級者向け) を参照してください。
+`UpdateClusterSoftware` は AMI が変更された場合にのみ再プロビジョニングし、既存の AMI 上でライフサイクルスクリプトの再実行を強制するためには使用できません。詳細なワークフローは [DEPLOYMENT.ja.md](DEPLOYMENT.ja.md#稼働中のクラスターへのライフサイクルスクリプト変更の適用) を参照してください。
 
 ## 8. コストモデル
 
