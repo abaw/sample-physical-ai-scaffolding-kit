@@ -40,7 +40,40 @@ First-time setup (run once):
 ```bash
 pip install -e "cli[dev]"     # installs physai CLI + ruff + pytest
 cd infra && npm install       # installs CDK dependencies
+
+# Pre-commit hooks (config lives at the repo root: ../.pre-commit-config.yaml).
+# Hooks are scoped to physai/ files and split between two stages:
+#   - pre-commit: ruff, pytest, shellcheck, tsc --noEmit, whitespace/EOF/yaml/json
+#   - pre-push:   cdk synth
+pip install pre-commit
+pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
+
+If `pre-commit install` errors with **"Cowardly refusing to install hooks
+with `core.hooksPath` set"**, another tool on your machine is managing git
+hooks via a system- or global-level `core.hooksPath`. Find it with:
+
+```bash
+git config --show-origin --get-all core.hooksPath
+```
+
+Then pick one of:
+
+1. **Chain via the other tool.** If it documents a way to invoke local
+   `.git/hooks/*`, install pre-commit with `GIT_CONFIG=/dev/null` so it
+   ignores the system setting during install only:
+   ```bash
+   GIT_CONFIG=/dev/null pre-commit install --hook-type pre-commit --hook-type pre-push
+   ```
+   The other tool's hook then runs first and delegates to the pre-commit
+   script in `.git/hooks/`.
+2. **Use Git 2.54+ config-based hooks.** `git hook list pre-commit` should
+   show both; see `git help hook`.
+3. **Skip git wiring; run manually.** No install — invoke before pushing:
+   ```bash
+   pre-commit run --all-files
+   pre-commit run --all-files --hook-stage pre-push
+   ```
 
 | Workstream | Command | Duration |
 |------------|---------|----------|

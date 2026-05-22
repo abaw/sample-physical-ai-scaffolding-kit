@@ -49,6 +49,7 @@ echo "Using key: $KEY"
 # Resolve cluster name from PhysaiClusterStack if not specified
 if [[ -z "$CLUSTER" ]]; then
   echo -n "Querying PhysaiClusterStack for cluster name...  "
+  # shellcheck disable=SC2016  # backticks here are JMESPath literals, not shell substitution
   CLUSTER=$(aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} cloudformation describe-stacks --stack-name PhysaiClusterStack \
     --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text 2>/dev/null || echo "")
   if [[ -z "$CLUSTER" || "$CLUSTER" == "None" ]]; then
@@ -65,6 +66,7 @@ fi
 
 # Find login node
 echo -n "Finding login node...  "
+# shellcheck disable=SC2016  # backticks here are JMESPath literals, not shell substitution
 LOGIN_ID=$(aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} sagemaker list-cluster-nodes --cluster-name "$CLUSTER" \
   --query 'ClusterNodeSummaries[?InstanceGroupName==`login-group`].InstanceId' --output text)
 if [[ -z "$LOGIN_ID" || "$LOGIN_ID" == "None" ]]; then

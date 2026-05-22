@@ -3,6 +3,7 @@
 # Requires Docker to be installed first.
 # Usage: install_enroot_pyxis.sh
 set -ex
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type controller compute login
 
@@ -43,7 +44,7 @@ if [[ -d /opt/dlami/nvme ]]; then
     ENROOT_DATA_PATH_BASE=/opt/dlami/nvme/tmp/enroot/data
     ENROOT_CACHE_PATH=/opt/dlami/nvme/enroot
     ENROOT_TEMP_PATH=/opt/dlami/nvme/tmp
-    
+
     mkdir -p /opt/dlami/nvme/tmp/enroot/data /opt/dlami/nvme/enroot
     chmod 1777 /opt/dlami/nvme/tmp /opt/dlami/nvme/tmp/enroot /opt/dlami/nvme/tmp/enroot/data /opt/dlami/nvme/enroot
 fi

@@ -7,6 +7,7 @@
 # Pins xserver-xorg-video-nvidia to match the kernel module version (HyperPod
 # AMI ships a specific NVIDIA driver; mismatched userspace fails Xorg startup).
 set -e
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type compute
 

@@ -34,6 +34,7 @@
 #
 # Usage: register_slurm_features.sh
 set -exo pipefail
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type compute
 

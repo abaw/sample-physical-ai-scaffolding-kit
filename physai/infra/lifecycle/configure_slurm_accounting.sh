@@ -5,6 +5,7 @@
 # alongside lifecycle scripts). Fetches DB password from Secrets Manager.
 # Usage: configure_slurm_accounting.sh
 set -euo pipefail
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type controller
 

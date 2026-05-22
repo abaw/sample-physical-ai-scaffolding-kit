@@ -12,6 +12,7 @@
 #
 # Usage: install_dcv.sh
 set -euo pipefail
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type compute
 
