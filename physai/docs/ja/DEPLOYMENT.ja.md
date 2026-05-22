@@ -274,7 +274,7 @@ infra/scripts/setup-ssh.sh
 ssh physai-login
 ```
 
-初回接続時にホストキーの確認を求められます。ProxyCommand が SSM 経由でトンネルするため、セキュリティグループの変更は不要です。
+ProxyCommand が SSM 経由でトンネルするため、セキュリティグループの変更は不要です。生成されるスニペットでは `UserKnownHostsFile=/dev/null` と `StrictHostKeyChecking=no` を設定しています。クラスター更新時に「REMOTE HOST IDENTIFICATION HAS CHANGED」エラーで接続が止まるのを防ぐためです。SSM トンネルの AWS 認証が接続を保護しています。
 
 ## 環境の削除
 

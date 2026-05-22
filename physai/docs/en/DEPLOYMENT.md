@@ -299,7 +299,7 @@ Add the snippet to `~/.ssh/config` and test:
 ssh physai-login
 ```
 
-You will be prompted to confirm the host key on the first connection. The ProxyCommand tunnels through SSM, so no security group changes are needed.
+The ProxyCommand tunnels through SSM, so no security group changes are needed. The generated snippet sets `UserKnownHostsFile=/dev/null` and `StrictHostKeyChecking=no` so cluster rotations don't trip the "REMOTE HOST IDENTIFICATION HAS CHANGED" check — AWS auth on the SSM tunnel is what protects the connection.
 
 ## Tearing Down
 

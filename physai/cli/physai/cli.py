@@ -16,6 +16,11 @@ def main():
     common.add_argument(
         "--host", default=argparse.SUPPRESS, help="SSH host (overrides config)"
     )
+    common.add_argument(
+        "--ssh-config",
+        default=argparse.SUPPRESS,
+        help="Path to an OpenSSH config file (overrides config)",
+    )
 
     parser = argparse.ArgumentParser(
         prog="physai",
@@ -205,8 +210,11 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    cfg = config.load(getattr(args, "host", None))
-    session = Session(cfg["host"])
+    cfg = config.load(
+        host_override=getattr(args, "host", None),
+        ssh_config_override=getattr(args, "ssh_config", None),
+    )
+    session = Session(cfg["host"], ssh_config=cfg.get("ssh_config"))
 
     if args.command == "build":
         build.run_build(
