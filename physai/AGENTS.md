@@ -24,6 +24,7 @@ Do NOT run these commands without explicit user approval:
 - **`physai run --config ...`** — hours, submits training/eval pipeline
 - **`npx cdk bootstrap`** — ~2 min, modifies AWS account state
 - **`infra/scripts/run-lifecycle.sh --all` (or `--node`/`--group` without `--dry-run`)** — modifies live node state on the cluster via SSM. Idempotent and safe, but still a state change — confirm before running. `--dry-run` is always safe.
+- **`python -m physai_regression upgrade-existing ...`** — SSHes into the login node, calls AWS, and submits a Slurm allocation across the GPU partition. The unit tests under `regression/tests/` are local and safe; the runner itself is not.
 
 Never run these autonomously. Always ask the user first.
 See [docs/TIMINGS.md](docs/TIMINGS.md) for the full decision guide.
@@ -52,7 +53,8 @@ cd infra && npm install       # installs CDK dependencies
 
 # Pre-commit hooks (config lives at the repo root: ../.pre-commit-config.yaml).
 # Hooks are scoped to physai/ files and split between two stages:
-#   - pre-commit: ruff, pytest, shellcheck, tsc --noEmit, whitespace/EOF/yaml/json
+#   - pre-commit: ruff, cli pytest, regression unit pytest, shellcheck,
+#                 tsc --noEmit, whitespace/EOF/yaml/json
 #   - pre-push:   cdk synth
 pip install pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
@@ -91,7 +93,10 @@ Then pick one of:
 | `cli/` | `cd cli && ruff format` | ~1 s |
 | `infra/` | `cd infra && npm run build` | ~5 s |
 | `infra/` | `cd infra && npm run synth` | ~10 s |
+| `regression/` | `cd regression && python -m pytest tests/` | ~1 s |
 | `examples/` | No automated validation yet | — |
+
+The regression *checks* themselves (`python -m physai_regression upgrade-existing ...`) talk to a live cluster — see the STOP block above.
 
 ---
 
@@ -142,6 +147,7 @@ and ask how to proceed — don't silently work from fragments.
 | [docs/en/STATUS.md](docs/en/STATUS.md) | Phase 1 scope and implementation status |
 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | Code style and conventions across all workstreams |
 | [docs/TIMINGS.md](docs/TIMINGS.md) | Command timings and agent decision guide |
+| [regression/README.md](regression/README.md) | Layer-1 regression checks against a live cluster |
 | [README.md](README.md) | Project overview and quick start |
 
 Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + `.ja.md` suffix.
@@ -180,6 +186,15 @@ Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + 
 | `examples/so101-gr00t/project.yaml` | Shared container config (base image, env vars) |
 | `examples/so101-gr00t/containers/*/container.yaml` | Per-container build spec (name, partition, gres) |
 | `examples/so101-gr00t/configs/*.yaml` | Run configs for pipeline jobs |
+
+### `regression/` — Live-Cluster Regression Checks
+
+| File | Role |
+|------|------|
+| `regression/physai_regression/__main__.py` | Entry point: `python -m physai_regression <mode> ...` |
+| `regression/physai_regression/conftest.py` | Session fixtures: `cluster_name` (CFN), `ssh_config_path` (tempfile), `physai_session` |
+| `regression/physai_regression/checks/` | Pytest checks; each function is one regression test |
+| `regression/tests/` | Unit tests for the regression code itself (no AWS/SSH) |
 
 ---
 

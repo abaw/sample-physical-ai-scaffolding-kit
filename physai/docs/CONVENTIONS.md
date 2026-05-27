@@ -39,6 +39,19 @@ Prescriptive rules for all workstreams. Follow these when writing or modifying c
 
 ---
 
+## Python (`regression/`)
+
+The regression suite lives under `regression/` and runs in place — no install step. It imports `physai.ssh.Session` from the `cli/` package, so the CLI must already be installed (`pip install -e "cli[dev]"`). Same Python rules as `cli/` (3.10+ type hints, docstrings, ruff, `python -m pytest`), with these additions:
+
+- MUST keep `regression/` Python compatible with the rules above; the `cli/` "minimal deps" rule does NOT apply here — `pytest` is the framework, and additional check-side deps are fine when justified
+- Files under `regression/physai_regression/checks/` MUST be named `test_<area>.py` and contain pytest functions named `test_<thing>` so pytest discovers them
+- Each check function MUST be marked with one of the coverage-layer markers registered in `regression/pytest.ini` (`@pytest.mark.platform` for Layer 1, `@pytest.mark.builtin_example` for Layer 2)
+- Each check MUST take `physai_session` (or any other live-cluster fixture from `conftest.py`) as a fixture rather than constructing its own SSH session
+- Unit tests for the framework itself live in `regression/tests/`; they MUST mock all AWS and SSH boundaries (no real `subprocess.run` against `aws`, `ssh`, or `setup-ssh.sh`)
+- Run unit tests via `cd regression && python -m pytest tests/`. The checks under `physai_regression/checks/` require a live cluster and MUST NOT be run autonomously — see [TIMINGS.md](TIMINGS.md)
+
+---
+
 ## TypeScript (`infra/`)
 
 - MUST use strict mode (`"strict": true` in tsconfig.json)

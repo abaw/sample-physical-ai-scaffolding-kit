@@ -22,6 +22,8 @@ Reference for every command an agent might run. Check here before executing anyt
 | `cd infra && npm run build` | ~5 s | local | yes | YES |
 | `cd infra && npm run synth` | ~10 s | local | yes | YES |
 | `pip install -e cli` | ~5 s | local | yes | YES |
+| `cd regression && python -m pytest tests/` | ~1 s | local | yes | YES |
+| ⚠️ `python -m physai_regression upgrade-existing ...` | **minutes** | local + AWS + cluster | yes | **NO** — talks to AWS, SSHes to login node, submits Slurm allocation across the GPU partition |
 | `physai list` | seconds | local (SSH) | yes | YES |
 | `physai logs <job-id>` | seconds | local (SSH) | yes | YES |
 | `infra/scripts/run-lifecycle.sh --dry-run ...` | seconds | local (+ AWS read-only) | yes | YES |
@@ -44,6 +46,8 @@ repo root (`physai/`) unless they include an explicit `cd`.
 
 - **Changed `cli/` Python code?**
   → Run `cd cli && python -m pytest` (from `cli/`), then `ruff check cli/physai/` and `ruff format cli/physai/` (from repo root). All three are safe and fast.
+- **Changed `regression/` Python code?**
+  → Run `cd regression && python -m pytest tests/`. The unit tests under `tests/` use mocks and don't talk to AWS — they're safe. The actual checks (`physai_regression/checks/`) only run via `python -m physai_regression upgrade-existing ...` against a live cluster — ⚠️ **STOP** and ask the user before invoking that.
 - **Changed `infra/` TypeScript?**
   → Run `cd infra && npm run build` then `npm run synth` (both from `infra/`). Safe and fast.
 - **Changed `infra/lifecycle/` shell scripts?**
