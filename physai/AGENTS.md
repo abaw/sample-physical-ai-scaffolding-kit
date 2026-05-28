@@ -24,6 +24,7 @@ Do NOT run these commands without explicit user approval:
 - **`physai run --config ...`** — hours, submits training/eval pipeline
 - **`npx cdk bootstrap`** — ~2 min, modifies AWS account state
 - **`infra/scripts/run-lifecycle.sh --all` (or `--node`/`--group` without `--dry-run`)** — modifies live node state on the cluster via SSM. Idempotent and safe, but still a state change — confirm before running. `--dry-run` is always safe.
+- **`python -m physai_regression fresh ...`** — `cdk destroy PhysaiClusterStack` → `cdk deploy` → checks → `cdk destroy` on pass. ~40 min wall time, AWS spend, and any in-flight Slurm jobs are lost when the stack is destroyed.
 - **`python -m physai_regression upgrade-existing ...`** — SSHes into the login node, calls AWS, and submits a Slurm allocation across the GPU partition. The unit tests under `regression/tests/` are local and safe; the runner itself is not.
 
 Never run these autonomously. Always ask the user first.
@@ -96,7 +97,7 @@ Then pick one of:
 | `regression/` | `cd regression && python -m pytest tests/` | ~1 s |
 | `examples/` | No automated validation yet | — |
 
-The regression *checks* themselves (`python -m physai_regression upgrade-existing ...`) talk to a live cluster — see the STOP block above.
+The regression *checks* themselves (`python -m physai_regression fresh ...` or `... upgrade-existing ...`) talk to a live cluster — see the STOP block above.
 
 ---
 
@@ -191,9 +192,11 @@ Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + 
 
 | File | Role |
 |------|------|
-| `regression/physai_regression/__main__.py` | Entry point: `python -m physai_regression <mode> ...` |
-| `regression/physai_regression/conftest.py` | Session fixtures: `cluster_name` (CFN), `ssh_config_path` (tempfile), `physai_session` |
+| `regression/physai_regression/__main__.py` | Entry point: `python -m physai_regression <mode> ...` (modes: `fresh`, `upgrade-existing`) |
+| `regression/physai_regression/orchestration/` | `cdk deploy`/`destroy`/stack-discovery wrappers and the lifecycle-mode sequences they compose |
+| `regression/physai_regression/conftest.py` | Session fixtures: `cluster_name` + `data_bucket_name` (CFN), `ssh_config_path` (tempfile), `physai_session`, `physai_cli` (CLI subprocess wrapper), `fake_project_dir`, `fake_containers_built` |
 | `regression/physai_regression/checks/` | Pytest checks; each function is one regression test |
+| `regression/fixtures/fake-project/` | Tiny project (`fake-converter`, `fake-trainer`, `fake-evaluator`) that exercises the full pipeline path in seconds |
 | `regression/tests/` | Unit tests for the regression code itself (no AWS/SSH) |
 
 ---

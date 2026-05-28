@@ -29,16 +29,32 @@ allocation across the GPU partition, briefly preempting the queue. If
 others share the cluster, coordinate before running.
 
 The runner takes a lifecycle mode positional. `python -m physai_regression
---help` lists the modes that exist; arguments after the mode are forwarded
-to pytest. The `upgrade-existing` mode runs the check suite against a
-running, user-managed cluster.
+--help` lists the modes; arguments after the mode are forwarded to
+pytest.
+
+### Modes
+
+- **`fresh`** — `cdk destroy PhysaiClusterStack` → `cdk deploy` → run
+  checks → `cdk destroy` (only on pass; left up on failure for debugging).
+  Idempotent; ~40 min wall time. Use to catch regressions that only
+  surface on a true first-boot deployment.
+- **`upgrade-existing`** — Run checks against a user-managed running
+  cluster. Doesn't touch the stack.
+
+### Examples
 
 ```bash
 cd physai/regression
+
+# Fresh deploy + checks + teardown
+python -m physai_regression fresh \
+  --profile <aws-profile> --region <aws-region>
+
+# Run against a running cluster
 python -m physai_regression upgrade-existing \
   --profile <aws-profile> --region <aws-region>
 
-# Or just one check:
+# Just one check:
 python -m physai_regression upgrade-existing -k dcvagent \
   --profile <aws-profile> --region <aws-region>
 
@@ -50,10 +66,12 @@ python -m physai_regression upgrade-existing \
 
 The runner:
 
-1. Resolves the cluster name from the `PhysaiClusterStack` CloudFormation
+1. (`fresh` only) Destroys + redeploys `PhysaiClusterStack` via `npx cdk`.
+2. Resolves the cluster name from the `PhysaiClusterStack` CloudFormation
    output (or uses `--cluster`).
-2. Calls `infra/scripts/setup-ssh.sh --output <tempfile>` to materialize
+3. Calls `infra/scripts/setup-ssh.sh --output <tempfile>` to materialize
    an SSH config for `physai-login` — your `~/.ssh/config` is **not**
    touched.
-3. Opens a multiplexed SSH session through that config and runs the checks.
-4. Cleans the tempfile up at session end.
+4. Opens a multiplexed SSH session through that config and runs the checks.
+5. Cleans the tempfile up at session end. (`fresh` also runs `cdk destroy`
+   on pass.)
