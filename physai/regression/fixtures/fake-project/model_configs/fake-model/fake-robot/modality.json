@@ -1,0 +1,5 @@
+{
+  "robot": "fake-robot",
+  "model": "fake-model",
+  "note": "Stub modality file. The fake-trainer and fake-evaluator scripts read nothing from this — it exists only so the CLI's model-config rsync has something to ship."
+}
