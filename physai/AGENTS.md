@@ -264,6 +264,10 @@ Practical rules when scripting around `cdk`:
   `infra/scripts/cleanup.sh`), emit `export AWS_REGION=<region>` before
   the `cdk` line rather than appending `--region` to the cdk command.
 
+The canonical implementation is
+`regression/physai_regression/orchestration/deploy.py` — copy that
+pattern when adding new `cdk` invocations.
+
 ---
 
 ## Conventions
