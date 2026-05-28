@@ -1,9 +1,8 @@
 #!/bin/bash
 # /app/eval.sh — fake-evaluator entrypoint.
 # Contract (PIPELINE_DEVELOP.md §3.4): write metrics.json with at least
-# eval_rounds, success_rate, checkpoint. --visual is accepted and ignored
-# (the regression suite exercises the host-context flock + dcv setup
-# wrapper around this script, not the IsaacSim render path).
+# eval_rounds, success_rate, checkpoint. --visual is accepted and
+# recorded in metrics.json but not acted on — this fake doesn't render.
 set -euo pipefail
 
 CHECKPOINT_DIR="$1"

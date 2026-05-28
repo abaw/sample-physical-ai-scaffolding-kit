@@ -29,10 +29,20 @@ import pytest
 
 from physai.ssh import Session
 
+from .orchestration.deploy import (
+    StackNotFound,
+    StackQueryError,
+    aws_cli_args,
+    describe_stack,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SETUP_SSH = REPO_ROOT / "infra" / "scripts" / "setup-ssh.sh"
 SSH_HOST = "physai-login"
 STACK_NAME = "PhysaiClusterStack"
+INFRA_STACK_NAME = "PhysaiInfraStack"
+FAKE_PROJECT_DIR = REPO_ROOT / "regression" / "fixtures" / "fake-project"
+FAKE_RAW_DIR = REPO_ROOT / "regression" / "fixtures" / "fake-raw"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -56,13 +66,24 @@ def aws_region(request: pytest.FixtureRequest) -> str | None:
     return request.config.getoption("--region")
 
 
-def _aws_args(profile: str | None, region: str | None) -> list[str]:
-    args: list[str] = []
-    if profile:
-        args += ["--profile", profile]
-    if region:
-        args += ["--region", region]
-    return args
+def _stack_output(
+    stack: str, output_key: str, profile: str | None, region: str | None
+) -> str:
+    """Read a single named output from a CFN stack, ``pytest.fail`` on absence."""
+    try:
+        value = describe_stack(
+            stack,
+            f"Stacks[0].Outputs[?OutputKey==`{output_key}`].OutputValue",
+            profile=profile,
+            region=region,
+        )
+    except (StackNotFound, StackQueryError) as e:
+        # Both a missing stack and an unreachable CloudFormation should fail
+        # the check cleanly — the message distinguishes which.
+        pytest.fail(str(e))
+    if not value:
+        pytest.fail(f"{stack} CFN output {output_key!r} is empty or missing")
+    return value
 
 
 @pytest.fixture(scope="session")
@@ -74,26 +95,7 @@ def cluster_name(
     override = request.config.getoption("--cluster")
     if override:
         return override
-    cmd = [
-        "aws",
-        *_aws_args(aws_profile, aws_region),
-        "cloudformation",
-        "describe-stacks",
-        "--stack-name",
-        STACK_NAME,
-        "--query",
-        "Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue",
-        "--output",
-        "text",
-    ]
-    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if r.returncode != 0 or not r.stdout.strip() or r.stdout.strip() == "None":
-        pytest.fail(
-            f"Could not resolve cluster name from {STACK_NAME} CFN output. "
-            f"Pass --cluster <name>.\n"
-            f"aws stderr: {r.stderr.strip()}"
-        )
-    return r.stdout.strip()
+    return _stack_output(STACK_NAME, "ClusterName", aws_profile, aws_region)
 
 
 @pytest.fixture(scope="session")
@@ -114,7 +116,7 @@ def ssh_config_path(
         cluster_name,
         "--output",
         str(path),
-        *_aws_args(aws_profile, aws_region),
+        *aws_cli_args(aws_profile, aws_region),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if r.returncode != 0:
@@ -135,3 +137,134 @@ def physai_session(ssh_config_path: Path) -> Iterator[Session]:
     s = Session(SSH_HOST, ssh_config=str(ssh_config_path))
     yield s
     s.close()
+
+
+@pytest.fixture(scope="session")
+def data_bucket_name(aws_profile: str | None, aws_region: str | None) -> str:
+    """Resolve the S3 data bucket name from ``PhysaiInfraStack`` CFN output."""
+    return _stack_output(INFRA_STACK_NAME, "DataBucketName", aws_profile, aws_region)
+
+
+@pytest.fixture(scope="session")
+def physai_cli(
+    ssh_config_path: Path,
+    aws_profile: str | None,
+    aws_region: str | None,
+) -> "PhysaiCLI":
+    """A callable that invokes ``physai`` with ``--ssh-config`` pointed at the
+    regression's tempfile config so it never touches ``~/.ssh/config``.
+
+    Returns a :class:`PhysaiCLI` whose ``run`` method takes positional argv
+    elements and forwards them. Each call subprocesses a fresh
+    ``physai`` invocation; the CLI starts its own ControlMaster connection
+    each time, but they all share the SSM tunnel.
+    """
+    if not shutil.which("physai"):
+        pytest.fail("`physai` not found on PATH — install with `pip install -e cli`.")
+    return PhysaiCLI(
+        ssh_config=str(ssh_config_path),
+        aws_profile=aws_profile,
+        aws_region=aws_region,
+    )
+
+
+@pytest.fixture(scope="session")
+def fake_project_dir() -> Path:
+    """Local path to ``regression/fixtures/fake-project/``.
+
+    Used by build/pipeline checks that need to point ``physai build`` /
+    ``physai run`` at the fixture project on the developer's machine.
+    """
+    if not FAKE_PROJECT_DIR.is_dir():
+        pytest.fail(f"fake-project fixture missing at {FAKE_PROJECT_DIR}")
+    return FAKE_PROJECT_DIR
+
+
+@pytest.fixture(scope="session")
+def fake_raw_dir() -> Path:
+    """Local path to ``regression/fixtures/fake-raw/``."""
+    if not FAKE_RAW_DIR.is_dir():
+        pytest.fail(f"fake-raw fixture missing at {FAKE_RAW_DIR}")
+    return FAKE_RAW_DIR
+
+
+@pytest.fixture(scope="session")
+def fake_containers_built(physai_cli, fake_project_dir) -> None:
+    """Build all three fake containers once per session.
+
+    Several Layer 1 checks need the fake-project ``.sqsh`` images on
+    ``/fsx/enroot/``. Building once at session start (with ``--rebuild``
+    so the suite is robust to leftover state) shares the cost across
+    every pipeline / visual / build check that depends on it.
+    """
+    for name in ("fake-converter", "fake-trainer", "fake-evaluator"):
+        physai_cli.run(
+            "build",
+            str(fake_project_dir / "containers" / name),
+            "--rebuild",
+            "-n",
+        )
+
+
+class PhysaiCLI:
+    """Subprocess wrapper for the ``physai`` CLI used by regression checks.
+
+    Each invocation passes ``--ssh-config <path>`` as the first arg so the
+    CLI uses the regression's tempfile SSH config (not ``~/.ssh/config``).
+    """
+
+    def __init__(
+        self,
+        ssh_config: str,
+        aws_profile: str | None,
+        aws_region: str | None,
+    ):
+        self.ssh_config = ssh_config
+        self.aws_profile = aws_profile
+        self.aws_region = aws_region
+
+    def run(
+        self,
+        *args: str,
+        check: bool = True,
+        timeout: float | None = None,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess:
+        """Run ``physai --host <SSH_HOST> --ssh-config <path> <args>...``.
+
+        ``--host`` and ``--ssh-config`` together pin the CLI's connection
+        target to the regression's tempfile config — overriding any
+        ``host``/``ssh_config`` the user has in ``~/.physai/config.yaml``
+        (e.g. ``physai-login2`` against a different cluster).
+
+        ``check=True`` (the default) raises :class:`AssertionError` on
+        non-zero exit so test failure messages report what failed cleanly.
+        """
+        cmd = [
+            "physai",
+            "--host",
+            SSH_HOST,
+            "--ssh-config",
+            self.ssh_config,
+            *args,
+        ]
+        env = {**os.environ}
+        if self.aws_profile:
+            env["AWS_PROFILE"] = self.aws_profile
+        if self.aws_region:
+            env["AWS_DEFAULT_REGION"] = self.aws_region
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=timeout,
+            input=input,
+        )
+        if check and r.returncode != 0:
+            raise AssertionError(
+                f"`{' '.join(cmd)}` exited {r.returncode}.\n"
+                f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
+            )
+        return r

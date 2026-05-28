@@ -15,6 +15,10 @@ if [[ -z "${RUN_CONFIG:-}" ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
+# Unconditional 20s sleep so test_cancel_cascades has a deterministic
+# window in which to observe train running and cancel it before it
+# completes. Cost on the cancel-unaware tests: +20s on test_train_eval_chain.
+sleep 20
 dd if=/dev/zero of="$OUTPUT_DIR/checkpoint.bin" bs=1024 count=1 status=none
 cat > "$OUTPUT_DIR/info.json" <<EOF
 {

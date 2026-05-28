@@ -18,16 +18,6 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> Magic
     return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-# ── _aws_args ───────────────────────────────────────────────────────────────
-
-
-def test_aws_args_includes_only_set_values():
-    assert conftest_module._aws_args(None, None) == []
-    assert conftest_module._aws_args("p", None) == ["--profile", "p"]
-    assert conftest_module._aws_args(None, "r") == ["--region", "r"]
-    assert conftest_module._aws_args("p", "r") == ["--profile", "p", "--region", "r"]
-
-
 # ── cluster_name ────────────────────────────────────────────────────────────
 
 
@@ -38,39 +28,38 @@ def _request_with(cluster: str | None = None) -> MagicMock:
 
 
 def test_cluster_name_uses_cli_override_without_calling_aws():
-    with patch("physai_regression.conftest.subprocess.run") as run:
+    with patch("physai_regression.conftest.describe_stack") as ds:
         out = conftest_module.cluster_name.__wrapped__(
             _request_with(cluster="explicit-cluster"),
             aws_profile=None,
             aws_region=None,
         )
     assert out == "explicit-cluster"
-    run.assert_not_called()
+    ds.assert_not_called()
 
 
 def test_cluster_name_resolves_from_cfn_output():
     with patch(
-        "physai_regression.conftest.subprocess.run",
-        return_value=_completed(stdout="physai-cluster-abc12345\n"),
-    ) as run:
+        "physai_regression.conftest.describe_stack",
+        return_value="physai-cluster-abc12345",
+    ) as ds:
         out = conftest_module.cluster_name.__wrapped__(
             _request_with(),
             aws_profile="myprofile",
             aws_region="us-west-2",
         )
     assert out == "physai-cluster-abc12345"
-    cmd = run.call_args.args[0]
-    assert cmd[0] == "aws"
-    assert "--profile" in cmd and "myprofile" in cmd
-    assert "--region" in cmd and "us-west-2" in cmd
-    assert "describe-stacks" in cmd
-    assert cmd[-2:] == ["--output", "text"]
+    kwargs = ds.call_args.kwargs
+    assert kwargs == {"profile": "myprofile", "region": "us-west-2"}
+    args = ds.call_args.args
+    assert args[0] == "PhysaiClusterStack"
+    assert "ClusterName" in args[1]
 
 
-def test_cluster_name_fails_loudly_when_stack_not_found():
+def test_cluster_name_fails_loudly_when_output_empty():
     with patch(
-        "physai_regression.conftest.subprocess.run",
-        return_value=_completed(stdout="None\n"),
+        "physai_regression.conftest.describe_stack",
+        return_value="",
     ):
         with pytest.raises(pytest.fail.Exception) as excinfo:
             conftest_module.cluster_name.__wrapped__(
@@ -78,7 +67,21 @@ def test_cluster_name_fails_loudly_when_stack_not_found():
                 aws_profile=None,
                 aws_region=None,
             )
-    assert "Could not resolve cluster name" in str(excinfo.value)
+    assert "ClusterName" in str(excinfo.value)
+
+
+def test_cluster_name_fails_loudly_when_stack_not_found():
+    with patch(
+        "physai_regression.conftest.describe_stack",
+        side_effect=conftest_module.StackNotFound("no such stack"),
+    ):
+        with pytest.raises(pytest.fail.Exception) as excinfo:
+            conftest_module.cluster_name.__wrapped__(
+                _request_with(),
+                aws_profile=None,
+                aws_region=None,
+            )
+    assert "no such stack" in str(excinfo.value)
 
 
 # ── ssh_config_path ─────────────────────────────────────────────────────────

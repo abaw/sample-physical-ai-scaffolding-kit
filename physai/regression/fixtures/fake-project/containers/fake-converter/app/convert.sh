@@ -19,7 +19,9 @@ if ! mkdir "$OUTPUT_DIR" 2>/dev/null; then
 fi
 
 # Sentinel files: enough for the regression checks to verify the stage ran.
-echo "fake-converter ran" > "$OUTPUT_DIR/info.json"
-echo "input=$INPUT_DIR" >> "$OUTPUT_DIR/info.json"
+{
+    echo "fake-converter ran"
+    echo "input=$INPUT_DIR"
+} > "$OUTPUT_DIR/info.txt"
 ls "$INPUT_DIR" > "$OUTPUT_DIR/input.listing"
 echo "fake-converter: wrote $OUTPUT_DIR"
