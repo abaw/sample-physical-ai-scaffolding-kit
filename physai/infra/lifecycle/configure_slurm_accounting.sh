@@ -125,13 +125,40 @@ set_kv "AccountingStorageHost=${HOST}"
 set_kv "AccountingStoragePort=6819"
 
 # Start slurmdbd (enable is idempotent; restart only if config changed or
-# slurmdbd isn't running).
+# slurmdbd isn't running). `systemctl restart` returns once the service
+# is launched, not once it's accepting RPCs — on first boot against a
+# fresh RDS database, slurmdbd authenticates to MariaDB and initializes
+# the accounting schema before it starts answering. The
+# wait_for_slurmdbd_ready loop below covers that gap.
 mkdir -p /var/log/slurm
 systemctl enable slurmdbd
 if $slurmdbd_changed || ! systemctl is-active --quiet slurmdbd; then
     systemctl restart slurmdbd
-    sleep 3
 fi
+
+# Block until slurmdbd answers RPCs. Probe with `sacctmgr list cluster` —
+# same call the registration step below makes, so success here means
+# success there. Aborts early if the unit died; aborts after 60s
+# otherwise.
+wait_for_slurmdbd_ready() {
+    local attempt
+    for attempt in $(seq 1 60); do
+        if ! systemctl is-active --quiet slurmdbd; then
+            echo "ERROR: slurmdbd is not active (attempt $attempt). Recent log:" >&2
+            journalctl -u slurmdbd -n 20 --no-pager >&2 || true
+            return 1
+        fi
+        if sacctmgr -in -P list cluster format=Cluster >/dev/null 2>&1; then
+            echo "slurmdbd ready on attempt $attempt"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "ERROR: slurmdbd did not start answering RPCs within 60s" >&2
+    journalctl -u slurmdbd -n 20 --no-pager >&2 || true
+    return 1
+}
+wait_for_slurmdbd_ready
 
 # If slurmdbd config changed (i.e. we may now be pointing at a different DBD,
 # or starting one for the first time), the cached cluster_id in slurmctld's
