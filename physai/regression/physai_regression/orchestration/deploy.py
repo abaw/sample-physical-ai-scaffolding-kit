@@ -22,6 +22,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_INFRA_DIR = REPO_ROOT / "infra"
+RUN_LIFECYCLE_SH = REPO_ROOT / "infra" / "scripts" / "run-lifecycle.sh"
 CLUSTER_STACK = "PhysaiClusterStack"
 
 
@@ -196,3 +197,40 @@ def cdk_destroy(
     r = subprocess.run(cmd, cwd=str(cwd), env=_cdk_env(region), check=False)
     if r.returncode != 0:
         raise RuntimeError(f"cdk destroy {stack} failed (exit {r.returncode})")
+
+
+def npm_ci(infra_dir: Path) -> None:
+    """Install ``infra/`` npm dependencies via ``npm ci``.
+
+    ``npm ci`` is required because a fresh worktree has no ``node_modules/``
+    — the parent worktree's install does not carry over. Without this step,
+    ``cdk deploy`` fails to resolve ``aws-cdk-lib`` and ts-node falls back
+    to compiling against missing types.
+    """
+    cmd = ["npm", "ci"]
+    r = subprocess.run(cmd, cwd=str(infra_dir), check=False)
+    if r.returncode != 0:
+        raise RuntimeError(f"npm ci failed in {infra_dir} (exit {r.returncode})")
+
+
+def run_lifecycle_all(
+    profile: str | None = None,
+    region: str | None = None,
+) -> None:
+    """Run ``infra/scripts/run-lifecycle.sh --all`` against the live cluster.
+
+    Re-applies the on-disk ``infra/lifecycle/`` scripts to every node via
+    SSM. Pairs with :func:`cdk_deploy` in the upgrade flow: ``cdk deploy``
+    re-uploads the scripts to S3 so future node replacements use the new
+    version, and ``--all`` applies them to nodes that are already running.
+
+    The script handles its own per-node logging under
+    ``/tmp/physai-lifecycle-runs/<timestamp>/``; stdout/stderr stream to the
+    parent so the user sees the per-node summary in real time.
+    """
+    if not RUN_LIFECYCLE_SH.is_file():
+        raise RuntimeError(f"run-lifecycle.sh not found at {RUN_LIFECYCLE_SH}")
+    cmd = [str(RUN_LIFECYCLE_SH), "--all", *aws_cli_args(profile, region)]
+    r = subprocess.run(cmd, cwd=str(DEFAULT_INFRA_DIR), check=False)
+    if r.returncode != 0:
+        raise RuntimeError(f"run-lifecycle.sh --all failed (exit {r.returncode})")

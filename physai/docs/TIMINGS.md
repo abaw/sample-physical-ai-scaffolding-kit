@@ -24,7 +24,8 @@ Reference for every command an agent might run. Check here before executing anyt
 | `pip install -e cli` | ~5 s | local | yes | YES |
 | `cd regression && python -m pytest tests/` | ~1 s | local | yes | YES |
 | ⚠️ `python -m physai_regression fresh ...` | **~40 min** | local + AWS + cluster | yes | **NO** — destroys, redeploys, and (on pass) destroys `PhysaiClusterStack`. Costs AWS deploy time and kills any in-flight jobs |
-| ⚠️ `python -m physai_regression upgrade-existing ...` | **minutes** | local + AWS + cluster | yes | **NO** — talks to AWS, SSHes to login node, submits Slurm allocation across the GPU partition |
+| ⚠️ `python -m physai_regression upgrade-existing ...` | **~5 min** | local + AWS + cluster | yes | **NO** — `cdk deploy` + `run-lifecycle.sh --all` against a user-managed cluster, then run checks. Modifies node state in place; no automated rollback if checks fail |
+| ⚠️ `python -m physai_regression upgrade-from-ref --from-ref <ref> ...` | **~50 min** | local + AWS + cluster | yes | **NO** — ephemeral fresh deploy from `<ref>` + upgrade-in-place to HEAD + checks + destroy + worktree cleanup. AWS deploy + teardown spend each run |
 | `physai list` | seconds | local (SSH) | yes | YES |
 | `physai logs <job-id>` | seconds | local (SSH) | yes | YES |
 | `infra/scripts/run-lifecycle.sh --dry-run ...` | seconds | local (+ AWS read-only) | yes | YES |
@@ -48,7 +49,7 @@ repo root (`physai/`) unless they include an explicit `cd`.
 - **Changed `cli/` Python code?**
   → Run `cd cli && python -m pytest` (from `cli/`), then `ruff check cli/physai/` and `ruff format cli/physai/` (from repo root). All three are safe and fast.
 - **Changed `regression/` Python code?**
-  → Run `cd regression && python -m pytest tests/`. The unit tests under `tests/` use mocks and don't talk to AWS — they're safe. The actual checks (`physai_regression/checks/`) only run via `python -m physai_regression fresh ...` or `... upgrade-existing ...` against a live cluster — ⚠️ **STOP** and ask the user before invoking either. The `fresh` mode is the more invasive one: it destroys + redeploys the cluster.
+  → Run `cd regression && python -m pytest tests/`. The unit tests under `tests/` use mocks and don't talk to AWS — they're safe. The actual checks (`physai_regression/checks/`) only run via `python -m physai_regression {fresh,upgrade-existing,upgrade-from-ref} ...` against a live cluster — ⚠️ **STOP** and ask the user before invoking any of them. `fresh` (~40 min) and `upgrade-from-ref` (~50 min) destroy/redeploy the cluster; `upgrade-existing` (~5 min) only modifies a running cluster's lifecycle state.
 - **Changed `infra/` TypeScript?**
   → Run `cd infra && npm run build` then `npm run synth` (both from `infra/`). Safe and fast.
 - **Changed `infra/lifecycle/` shell scripts?**
