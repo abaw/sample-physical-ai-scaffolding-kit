@@ -159,3 +159,65 @@ def test_rm_evaluations_category():
     rm_calls = [c for c in session.run.call_args_list if c.args[0].startswith("rm -rf")]
     assert len(rm_calls) == 1
     assert "/fsx/evaluations/run-2026" in rm_calls[0].args[0]
+
+
+def _mock_session_rm_permission_denied(category: str):
+    session = MagicMock()
+
+    def run_side_effect(cmd: str) -> str:
+        if "-d " in cmd and "-f " in cmd:
+            return "dir"
+        if "du -sh" in cmd:
+            return "1.2G\t/fsx/x"
+        if cmd.startswith("squeue"):
+            return ""
+        if cmd.startswith("rm -rf"):
+            raise RuntimeError(
+                f"ssh host: rm: cannot remove '/fsx/{category}/foo/data.bin': "
+                "Permission denied"
+            )
+        raise AssertionError(f"unexpected session.run call: {cmd!r}")
+
+    session.run.side_effect = run_side_effect
+    return session
+
+
+def test_rm_permission_denied_prints_sudo_hint():
+    session = _mock_session_rm_permission_denied("datasets")
+    with pytest.raises(SystemExit) as excinfo:
+        rm(session, "datasets", "foo", force=True)
+    msg = str(excinfo.value)
+    assert "Permission denied" in msg
+    assert "sudo rm -rf /fsx/datasets/foo" in msg
+    # Don't suggest deleting from S3 — that's the durable source of truth,
+    # not what the user wants when removing a local FSx artifact.
+    assert "aws s3" not in msg
+
+
+def test_rm_raw_permission_denied_does_not_suggest_s3_rm():
+    session = _mock_session_rm_permission_denied("raw")
+    with pytest.raises(SystemExit) as excinfo:
+        rm(session, "raw", "demo-set", force=True)
+    msg = str(excinfo.value)
+    assert "Permission denied" in msg
+    assert "sudo rm -rf /fsx/raw/demo-set" in msg
+    assert "aws s3" not in msg
+
+
+def test_rm_propagates_non_permission_runtime_errors():
+    session = MagicMock()
+
+    def run_side_effect(cmd: str) -> str:
+        if "-d " in cmd and "-f " in cmd:
+            return "dir"
+        if "du -sh" in cmd:
+            return "1.2G\t/fsx/x"
+        if cmd.startswith("squeue"):
+            return ""
+        if cmd.startswith("rm -rf"):
+            raise RuntimeError("ssh host: connection lost")
+        raise AssertionError(f"unexpected session.run call: {cmd!r}")
+
+    session.run.side_effect = run_side_effect
+    with pytest.raises(RuntimeError, match="connection lost"):
+        rm(session, "datasets", "foo", force=True)

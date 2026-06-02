@@ -193,11 +193,24 @@ aws cloudformation describe-stacks --stack-name PhysaiInfraStack \
 その後、アップロードします。
 
 ```bash
-aws s3 cp --recursive /path/to/my-demo-dir/ s3://<data-bucket>/raw/my-demo-dir/
+aws s3 cp --recursive \
+  --metadata file-owner=1000,file-group=1000 \
+  /path/to/my-demo-dir/ s3://<data-bucket>/raw/my-demo-dir/
 
 # verify it's visible on the cluster
 physai ls raw
 ```
+
+`--metadata file-owner=1000,file-group=1000` を指定すると、FSx がインポート時に
+ファイルの所有者を `ubuntu` ユーザー（HyperPod ノードでは UID/GID 1000）に
+設定します。指定しない場合、インポートされるファイルは `root:root` モード
+`755` になります — ubuntu 権限のジョブから読み込みは可能ですが、
+**`physai rm` では削除できません**。なお、DRA が合成する親ディレクトリは
+S3 にメタデータを持たないため常に root 所有です。FSx ツリー全体を削除するには、
+ログインノードで `sudo rm -rf /fsx/raw/<name>` を実行してください。
+設定可能な `x-amz-meta-file-*` フィールドの一覧は
+[FSx for Lustre POSIX メタデータ](https://docs.aws.amazon.com/fsx/latest/LustreGuide/posix-metadata-support.html)
+を参照してください。
 
 #### 3.2.3. physai rm
 
@@ -219,6 +232,7 @@ physai rm datasets foo -f   # 確認プロンプトをスキップ
 - `_find_active_job_producing` に対して、同じパスを生成中のアクティブなパイプラインジョブがあるかを問い合わせます。該当するジョブがある場合は削除を拒否し、ジョブ ID を表示します（ユーザーは先に `physai cancel` で取り消す必要があります）。
 - 解決されたパス、種別、`du -sh` で算出したサイズを表示し、`[y/N]` のプロンプトを出します。`-f` / `--force` でプロンプトをスキップできます。
 - `raw` の場合は、`/fsx/raw/` が S3 からの DRA キャッシュである旨も表示します — ローカルの退避は非破壊的であり、オブジェクトは遅延再インポートによって引き続き利用可能です。
+- `rm -rf` が `Permission denied` で失敗した場合（`x-amz-meta-file-owner`／`-group` を指定せずに S3 からインポートしたファイルは `root:root` になるため、典型的に発生します）、`physai rm` はログインノードで `sudo rm -rf` を実行するヒントを表示して終了します。
 
 ### 3.3. パイプラインコマンド
 

@@ -207,11 +207,23 @@ aws cloudformation describe-stacks --stack-name PhysaiInfraStack \
 Then upload:
 
 ```bash
-aws s3 cp --recursive /path/to/my-demo-dir/ s3://<data-bucket>/raw/my-demo-dir/
+aws s3 cp --recursive \
+  --metadata file-owner=1000,file-group=1000 \
+  /path/to/my-demo-dir/ s3://<data-bucket>/raw/my-demo-dir/
 
 # verify it's visible on the cluster
 physai ls raw
 ```
+
+The `--metadata file-owner=1000,file-group=1000` flags tell FSx to import
+the files as the `ubuntu` user (UID/GID 1000 on HyperPod nodes). Without
+them, imported files default to `root:root` mode `755` — readable by jobs
+running as ubuntu but **not deletable** with `physai rm`. The
+DRA-synthesized parent directory is always root-owned (S3 has no metadata
+for keys that end in `/`), so to fully remove the FSx tree, ssh to the
+login node and run `sudo rm -rf /fsx/raw/<name>`. See
+[FSx for Lustre POSIX metadata](https://docs.aws.amazon.com/fsx/latest/LustreGuide/posix-metadata-support.html)
+for the full list of `x-amz-meta-file-*` fields you can set.
 
 #### 3.2.3. physai rm
 
@@ -240,6 +252,10 @@ Before deleting, `rm`:
 - For `raw`, also prints a note that `/fsx/raw/` is a DRA cache from S3 — the
   local eviction is non-destructive, and the object remains available via
   lazy-reimport.
+- If `rm -rf` fails with `Permission denied` (typical for files imported
+  from S3 without `x-amz-meta-file-owner`/`-group` set, which default to
+  `root:root`), `physai rm` exits with a hint pointing at `sudo rm -rf`
+  on the login node.
 
 ### 3.3. Pipeline commands
 
