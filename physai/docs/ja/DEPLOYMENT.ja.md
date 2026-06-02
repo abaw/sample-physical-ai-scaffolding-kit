@@ -68,6 +68,33 @@ npx cdk bootstrap
 npx cdk deploy --all --require-approval never
 ```
 
+### AWS アカウントとリージョンの指定
+
+`cdk deploy` および `cdk destroy` は **プロファイル** を `--profile` から
+読み取りますが、**リージョン** は `AWS_REGION` / `AWS_DEFAULT_REGION`
+環境変数から読み取ります — `--region` フラグからは読み取りません。
+`--region` は黙って受け取られて無視されます（[aws/aws-cdk#28725](https://github.com/aws/aws-cdk/issues/28725)
+を参照。`cdk deploy --help` にも `--region` は載っていません）。
+このアプリのような environment-agnostic なスタックでは、
+親シェルの `AWS_REGION` で指定されたリージョンにデプロイされます。
+
+リージョンはコマンドライン引数ではなく環境変数で指定してください:
+
+```bash
+# シェルセッション全体でプロファイルとリージョンを指定する場合:
+export AWS_PROFILE=myprofile
+export AWS_REGION=us-west-2
+npx cdk deploy --all --require-approval never
+
+# 単一コマンドだけに適用する場合:
+AWS_REGION=us-west-2 npx cdk deploy --all --require-approval never --profile myprofile
+```
+
+`aws` CLI は `--region` を正しく認識するため、本ドキュメントや
+`infra/scripts/cleanup.sh` の後半に登場する `aws ...` コマンドでは
+通常通り `--region` が使えます。影響を受けるのは `cdk deploy`/`destroy`
+のみです。
+
 **2つの CloudFormation スタックが作成されます:**
 
 | スタック | 内容 | 削除保護 |

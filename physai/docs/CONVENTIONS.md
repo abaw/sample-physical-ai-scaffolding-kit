@@ -56,6 +56,7 @@ Prescriptive rules for all workstreams. Follow these when writing or modifying c
 - Formatting: singleQuote, tabWidth 2, printWidth 100 (matches parent `.vscode/settings.json`)
 - DO NOT add test frameworks yet — no test infrastructure exists (known gap)
 - DO NOT add eslint — no config exists; rely on `tsc` for correctness
+- DO NOT pass `--region` to `cdk deploy` or `cdk destroy` — the flag is silently accepted and ignored (`cdk deploy --help` doesn't list it; see [aws/aws-cdk#28725](https://github.com/aws/aws-cdk/issues/28725)). Set `AWS_REGION` / `AWS_DEFAULT_REGION` in the parent shell or the subprocess environment instead. `--profile` is documented and works normally. See [AGENTS.md](../AGENTS.md#gotchas-cdk-deploy---region-is-silently-ignored)
 
 ---
 

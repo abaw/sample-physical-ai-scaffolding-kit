@@ -219,6 +219,28 @@ new SSM-based tool, copy that pattern rather than rolling your own.
 
 ---
 
+## Gotchas: `cdk deploy --region` is silently ignored
+
+`cdk deploy` and `cdk destroy` do not honor `--region` despite the
+top-level `cdk` parser accepting it (the flag is parsed and discarded;
+see [aws/aws-cdk#28725](https://github.com/aws/aws-cdk/issues/28725) and
+`cdk deploy --help`, which does not list it). For environment-agnostic
+stacks like this app's, the deploy region is resolved from
+`AWS_REGION` / `AWS_DEFAULT_REGION` in the parent shell, falling back to
+the profile's `region` setting. `--profile` works as documented.
+
+Practical rules when scripting around `cdk`:
+
+- Pass the target region in the subprocess **environment**, not on the
+  argv: `env={"AWS_REGION": region, "AWS_DEFAULT_REGION": region, ...}`.
+- The `aws` CLI does honor `--region` correctly — only `cdk` is special.
+  Use `--region` freely on `aws cloudformation`, `aws s3`, etc.
+- When generating commands for a human to copy-paste (e.g.
+  `infra/scripts/cleanup.sh`), emit `export AWS_REGION=<region>` before
+  the `cdk` line rather than appending `--region` to the cdk command.
+
+---
+
 ## Conventions
 
 See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for code style, naming, and

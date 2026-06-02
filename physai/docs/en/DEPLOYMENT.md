@@ -68,6 +68,34 @@ npx cdk bootstrap
 npx cdk deploy --all --require-approval never
 ```
 
+### Choosing the AWS account and region
+
+`cdk deploy` and `cdk destroy` read the **profile** from `--profile` but
+read the **region** from the `AWS_REGION` / `AWS_DEFAULT_REGION`
+environment variables — *not* from `--region`. The `--region` flag is
+silently accepted and ignored (see
+[aws/aws-cdk#28725](https://github.com/aws/aws-cdk/issues/28725); `cdk
+deploy --help` does not list it). For an environment-agnostic stack like
+this app's, that means a deploy targets whatever region the parent
+shell's `AWS_REGION` is set to.
+
+Pick the region by setting it in the environment, not on the command
+line:
+
+```bash
+# Pick profile + region for the whole shell session:
+export AWS_PROFILE=myprofile
+export AWS_REGION=us-west-2
+npx cdk deploy --all --require-approval never
+
+# Or one-shot, for a single command:
+AWS_REGION=us-west-2 npx cdk deploy --all --require-approval never --profile myprofile
+```
+
+The `aws` CLI does honor `--region`, so the `aws ...` commands later in
+this doc and in `infra/scripts/cleanup.sh` accept it normally; only `cdk
+deploy`/`destroy` are affected.
+
 **Two CloudFormation stacks are created:**
 
 | Stack | Contents | Termination Protection |
