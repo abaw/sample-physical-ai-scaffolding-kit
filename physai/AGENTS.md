@@ -28,6 +28,15 @@ Do NOT run these commands without explicit user approval:
 Never run these autonomously. Always ask the user first.
 See [docs/TIMINGS.md](docs/TIMINGS.md) for the full decision guide.
 
+**Tearing down the deployment.** Don't reach for raw `cdk destroy` on
+`PhysaiInfraStack` — termination protection is on, and FSx/RDS/S3 are
+RETAINed by CloudFormation so a naive destroy fails halfway and leaves
+the stack stuck. Run `infra/scripts/cleanup.sh --profile <p> --region <r>`,
+which prints the full ordered teardown procedure (cluster destroy →
+empty FSx/RDS → S3 → disable termination protection → infra destroy →
+optional secret force-delete). The script doesn't execute anything; it
+just emits the commands for the user to review and run.
+
 ---
 
 ## Quick Verification Commands
@@ -162,6 +171,7 @@ Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + 
 | `infra/lifecycle/lifecycle_script.py` | Lifecycle orchestrator (Python, runs all scripts in order) |
 | `infra/lifecycle/_lib.sh` | Shared node-type detection + `require_node_type` guard |
 | `infra/scripts/run-lifecycle.sh` | Re-run lifecycle scripts on existing nodes via SSM |
+| `infra/scripts/cleanup.sh` | Print the ordered teardown procedure for the deployment (does not execute) |
 
 ### `examples/` — Container Definitions
 

@@ -105,8 +105,11 @@ aws cloudformation update-termination-protection \\
 ${CDK_ENV_PREFIX}npx cdk destroy PhysaiInfraStack${CDK_ARGS_STR}
 
 # 6. Optional: the DB secret is deleted by PhysaiInfraStack destroy, but
-#    Secrets Manager holds it in a 7-30 day recovery window. Run this only if
-#    you need to re-deploy immediately with the same secret name.
+#    Secrets Manager holds it in a 7-30 day recovery window. While the
+#    secret is in that window, redeploying PhysaiInfraStack fails on the
+#    Secret resource with ResourceExistsException (the secret name is
+#    fixed by the stack). Run this only if you need to re-deploy
+#    immediately with the same secret name.
 aws secretsmanager delete-secret --secret-id ${SECRET_ID:-<SECRET_ID>} \\
   --force-delete-without-recovery${AWS_ARGS_STR}
 
