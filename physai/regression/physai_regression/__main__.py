@@ -23,10 +23,31 @@ Examples::
     python -m physai_regression upgrade-from-ref --from-ref v0.2.0 \\
         --profile myprofile --region us-west-2
 
+    python -m physai_regression upgrade-existing --builtin-examples \\
+        --profile myprofile --region us-west-2
+
 ``--profile`` and ``--region`` are consumed by both the orchestration
 primitives (``cdk deploy``/``destroy``) and the conftest fixtures, so they
 are parsed at the top level and forwarded to pytest as well. All other
 arguments after the mode are forwarded to pytest unchanged.
+
+``--builtin-examples`` is mode-orthogonal: when set with any of the three
+modes it adds the Layer 2 shipped-example checks on top of the Layer 1
+platform checks (~100 min and ~$2 added per check). Layer 2 needs a raw
+data fixture, supplied via ``--raw-source <URI>`` (see below); the two
+flags must be set together.
+
+``--raw-source <URI>`` is mode-orthogonal too. Accepted schemes:
+
+- ``file:///abs/path`` — local source directory; rsynced to the cluster.
+- ``s3://bucket[/prefix/]`` — S3 source. Cluster IAM is probed first; on
+  permission errors a presigned-URL fallback uses the run's ``--profile``
+  / ``--region`` to read the bucket.
+- ``hf://owner/repo[@revision]`` — HuggingFace public dataset.
+
+The fixture is always rm'd and re-fetched for each run; the test rms
+the staged directory on success and leaves it for inspection on
+failure.
 """
 
 import argparse
@@ -36,6 +57,7 @@ from pathlib import Path
 import pytest
 
 from .orchestration import deploy, flows
+from .raw_staging import RawSourceError, parse_raw_source
 
 CHECKS_DIR = Path(__file__).resolve().parent / "checks"
 
@@ -59,14 +81,53 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Starting commit/tag to deploy before upgrading to HEAD "
         "(required for upgrade-from-ref).",
     )
+    parser.add_argument(
+        "--builtin-examples",
+        action="store_true",
+        help="Also run Layer 2 shipped-example checks (~100 min and ~$2 per "
+        "check on top of the Layer 1 cost). Without this flag only the "
+        "default Layer 1 platform checks run. Requires --raw-source.",
+    )
+    parser.add_argument(
+        "--raw-source",
+        dest="raw_source",
+        default=None,
+        metavar="<URI>",
+        help="URI for the Layer 2 raw fixture. Required when "
+        "--builtin-examples is set; rejected otherwise. Schemes: "
+        "file:///abs/path | s3://bucket[/prefix/] | "
+        "hf://owner/repo[@revision]. The fixture is re-fetched every "
+        "run; the cluster wipes /fsx/raw/<name>/ before downloading.",
+    )
     return parser
 
 
 def _pytest_args(
-    profile: str | None, region: str | None, extra: list[str]
+    profile: str | None,
+    region: str | None,
+    extra: list[str],
+    *,
+    builtin_examples: bool = False,
+    raw_source: str | None = None,
 ) -> list[str]:
-    """Forward AWS args + caller-supplied args to pytest under ``CHECKS_DIR``."""
+    """Forward AWS args + caller-supplied args to pytest under ``CHECKS_DIR``.
+
+    ``builtin_examples=True`` overrides the default ``-m "not builtin_example"``
+    in ``pytest.ini`` with ``-m "platform or builtin_example"`` so both
+    layers run. The default selector explicitly names ``platform`` rather
+    than relying on unmarked tests because every check ships with a layer
+    marker today.
+
+    ``raw_source`` is forwarded as ``--raw-source <URI>`` so the
+    ``raw_source_uri`` fixture can pick it up; the runner-level argparse
+    is what enforces it being mandatory-with-``builtin_examples``, so
+    this helper only forwards what it's given.
+    """
     args: list[str] = [str(CHECKS_DIR)]
+    if builtin_examples:
+        args += ["-m", "platform or builtin_example"]
+    if raw_source:
+        args += ["--raw-source", raw_source]
     if profile:
         args += ["--profile", profile]
     if region:
@@ -75,14 +136,44 @@ def _pytest_args(
     return args
 
 
-def _run_checks(profile: str | None, region: str | None, extra: list[str]) -> int:
-    return int(pytest.main(_pytest_args(profile, region, extra)))
+def _run_checks(
+    profile: str | None,
+    region: str | None,
+    extra: list[str],
+    *,
+    builtin_examples: bool = False,
+    raw_source: str | None = None,
+) -> int:
+    return int(
+        pytest.main(
+            _pytest_args(
+                profile,
+                region,
+                extra,
+                builtin_examples=builtin_examples,
+                raw_source=raw_source,
+            )
+        )
+    )
 
 
-def _run_fresh(profile: str | None, region: str | None, extra: list[str]) -> int:
+def _run_fresh(
+    profile: str | None,
+    region: str | None,
+    extra: list[str],
+    *,
+    builtin_examples: bool = False,
+    raw_source: str | None = None,
+) -> int:
     """fresh: destroy → deploy → checks → destroy on pass."""
     flows.redeploy_from_clean(profile=profile, region=region)
-    rc = _run_checks(profile, region, extra)
+    rc = _run_checks(
+        profile,
+        region,
+        extra,
+        builtin_examples=builtin_examples,
+        raw_source=raw_source,
+    )
     if rc == 0:
         deploy.cdk_destroy(profile=profile, region=region, skip_if_absent=True)
     else:
@@ -95,7 +186,12 @@ def _run_fresh(profile: str | None, region: str | None, extra: list[str]) -> int
 
 
 def _run_upgrade_existing(
-    profile: str | None, region: str | None, extra: list[str]
+    profile: str | None,
+    region: str | None,
+    extra: list[str],
+    *,
+    builtin_examples: bool = False,
+    raw_source: str | None = None,
 ) -> int:
     """upgrade-existing: apply the in-place upgrade, then run the check suite.
 
@@ -103,7 +199,13 @@ def _run_upgrade_existing(
     user to debug; rolling back would require a separate downgrade flow.
     """
     flows.upgrade_in_place(profile=profile, region=region)
-    rc = _run_checks(profile, region, extra)
+    rc = _run_checks(
+        profile,
+        region,
+        extra,
+        builtin_examples=builtin_examples,
+        raw_source=raw_source,
+    )
     if rc != 0:
         print(
             f"Checks exited with code {rc}. Cluster is in the upgraded state; "
@@ -114,7 +216,13 @@ def _run_upgrade_existing(
 
 
 def _run_upgrade_from_ref(
-    ref: str, profile: str | None, region: str | None, extra: list[str]
+    ref: str,
+    profile: str | None,
+    region: str | None,
+    extra: list[str],
+    *,
+    builtin_examples: bool = False,
+    raw_source: str | None = None,
 ) -> int:
     """upgrade-from-ref: deploy@ref → upgrade to HEAD → checks → destroy.
 
@@ -129,7 +237,13 @@ def _run_upgrade_from_ref(
     physai_in_worktree = flows.deploy_from_ref(ref, profile=profile, region=region)
     print(f"physai/ at {ref}: {physai_in_worktree}", file=sys.stderr)
     flows.upgrade_in_place(profile=profile, region=region)
-    rc = _run_checks(profile, region, extra)
+    rc = _run_checks(
+        profile,
+        region,
+        extra,
+        builtin_examples=builtin_examples,
+        raw_source=raw_source,
+    )
     if rc != 0:
         print(
             f"Checks exited with code {rc}. "
@@ -152,13 +266,44 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode == "upgrade-from-ref" and args.from_ref is None:
         parser.error("upgrade-from-ref requires --from-ref <commit-or-tag>")
 
+    if args.raw_source is not None and not args.builtin_examples:
+        parser.error("--raw-source is only valid with --builtin-examples")
+    if args.builtin_examples and args.raw_source is None:
+        parser.error("--builtin-examples requires --raw-source <URI>")
+    if args.raw_source is not None:
+        # Validate the URI shape now, before any deploy: parse_raw_source is
+        # pure (no filesystem/network), so a typo like `s4://...` or
+        # `hf://noslash` fails here in milliseconds instead of after a
+        # ~tens-of-minutes cluster deploy when the staging fixture runs.
+        try:
+            parse_raw_source(args.raw_source)
+        except RawSourceError as e:
+            parser.error(str(e))
+
     if args.mode == "fresh":
-        return _run_fresh(args.profile, args.region, pytest_args)
+        return _run_fresh(
+            args.profile,
+            args.region,
+            pytest_args,
+            builtin_examples=args.builtin_examples,
+            raw_source=args.raw_source,
+        )
     if args.mode == "upgrade-existing":
-        return _run_upgrade_existing(args.profile, args.region, pytest_args)
+        return _run_upgrade_existing(
+            args.profile,
+            args.region,
+            pytest_args,
+            builtin_examples=args.builtin_examples,
+            raw_source=args.raw_source,
+        )
     if args.mode == "upgrade-from-ref":
         return _run_upgrade_from_ref(
-            args.from_ref, args.profile, args.region, pytest_args
+            args.from_ref,
+            args.profile,
+            args.region,
+            pytest_args,
+            builtin_examples=args.builtin_examples,
+            raw_source=args.raw_source,
         )
 
     raise AssertionError(f"unreachable: argparse rejected unknown mode {args.mode!r}")

@@ -22,7 +22,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -54,6 +54,42 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help=f"Cluster name (default: resolved from {STACK_NAME} CFN output)",
     )
+    parser.addoption(
+        "--raw-source",
+        action="store",
+        default=None,
+        help="URI to stage as the Layer 2 raw fixture "
+        "(file:///abs/path | s3://bucket[/prefix/] | hf://owner/repo[@rev]). "
+        "Required by Layer 2 checks; ignored by Layer 1.",
+    )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: Sequence[pytest.Item]
+) -> None:
+    """Fail fast when Layer 2 checks are selected without ``--raw-source``.
+
+    The runner (``python -m physai_regression --builtin-examples``)
+    rejects the missing flag at argparse time, before any cluster deploy.
+    This is the backstop for a direct ``pytest`` invocation: it errors at
+    *collection* time — before any test runs — rather than letting the
+    failure surface from the Layer 2 staging fixture after Layer 1 has
+    already executed.
+
+    ``trylast=True`` makes this run after pytest's own ``-m`` deselection,
+    so ``items`` reflects what will actually run. Without it the default
+    ``-m "not builtin_example"`` selector (``pytest.ini``) hasn't been
+    applied yet and ``items`` still holds the Layer 2 test, which would
+    abort an ordinary Layer 1 run that never intended to stage a fixture.
+    """
+    if config.getoption("--raw-source") is not None:
+        return
+    if any(item.get_closest_marker("builtin_example") for item in items):
+        raise pytest.UsageError(
+            "Layer 2 (builtin_example) checks require --raw-source <URI> "
+            "(file:///abs/path | s3://bucket[/prefix/] | hf://owner/repo[@rev])"
+        )
 
 
 @pytest.fixture(scope="session")
@@ -64,6 +100,19 @@ def aws_profile(request: pytest.FixtureRequest) -> str | None:
 @pytest.fixture(scope="session")
 def aws_region(request: pytest.FixtureRequest) -> str | None:
     return request.config.getoption("--region")
+
+
+@pytest.fixture(scope="session")
+def raw_source_uri(request: pytest.FixtureRequest) -> str | None:
+    """Value of ``--raw-source`` for the Layer 2 staging fixture.
+
+    Returns ``None`` for Layer 1 runs that don't supply the flag; the
+    Layer 2 fixture turns the ``None`` into a hard test failure (the
+    runner-level argparse normally enforces this, but a direct
+    ``pytest`` invocation can reach the fixture without going through
+    the runner).
+    """
+    return request.config.getoption("--raw-source")
 
 
 def _stack_output(

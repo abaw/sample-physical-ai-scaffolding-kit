@@ -24,9 +24,10 @@ Do NOT run these commands without explicit user approval:
 - **`physai run --config ...`** — hours, submits training/eval pipeline
 - **`npx cdk bootstrap`** — ~2 min, modifies AWS account state
 - **`infra/scripts/run-lifecycle.sh --all` (or `--node`/`--group` without `--dry-run`)** — modifies live node state on the cluster via SSM. Idempotent and safe, but still a state change — confirm before running. `--dry-run` is always safe.
-- **`python -m physai_regression fresh ...`** — `cdk destroy PhysaiClusterStack` → `cdk deploy` → checks → `cdk destroy` on pass. ~40 min wall time, AWS spend, and any in-flight Slurm jobs are lost when the stack is destroyed.
-- **`python -m physai_regression upgrade-existing ...`** — Applies the in-place upgrade (`cdk deploy PhysaiClusterStack` + `run-lifecycle.sh --all`) to a user-managed cluster, then runs the platform check suite. ~5 min wall time. Modifies the user's running cluster's lifecycle state and re-uploads scripts to S3; on check failure the cluster is left in the upgraded state with no automated rollback.
-- **`python -m physai_regression upgrade-from-ref --from-ref <ref> ...`** — Ephemeral fresh deploy from `<ref>`, upgrade to HEAD, run the platform check suite, then destroy + worktree cleanup. ~50 min wall time, AWS spend, and on failure leaves both a running cluster and a `git worktree` on disk for inspection.
+- **`python -m physai_regression fresh ...`** — `cdk destroy PhysaiClusterStack` → `cdk deploy` → checks → `cdk destroy` on pass. ~25 min wall time, AWS spend, and any in-flight Slurm jobs are lost when the stack is destroyed.
+- **`python -m physai_regression upgrade-existing ...`** — Applies the in-place upgrade (`cdk deploy PhysaiClusterStack` + `run-lifecycle.sh --all`) to a user-managed cluster, then runs the platform check suite. ~13 min wall time. Modifies the user's running cluster's lifecycle state and re-uploads scripts to S3; on check failure the cluster is left in the upgraded state with no automated rollback.
+- **`python -m physai_regression upgrade-from-ref --from-ref <ref> ...`** — Ephemeral fresh deploy from `<ref>`, upgrade to HEAD, run the platform check suite, then destroy + worktree cleanup. ~35 min wall time, AWS spend, and on failure leaves both a running cluster and a `git worktree` on disk for inspection.
+- **Adding `--builtin-examples` to any mode** — Adds the Layer 2 shipped-example checks on top of the Layer 1 platform checks. Requires `--raw-source <URI>` (`file:///abs/path` | `s3://bucket[/prefix/]` | `hf://owner/repo[@rev]`); the cluster wipes `/fsx/raw/<base>-<timestamp>/` and re-fetches every run, so the staged directory is replaced each time. Example: `python -m physai_regression upgrade-existing --builtin-examples --raw-source file:///path/to/raw/ --profile ... --region ...`. Today this runs the `so101-gr00t/` example for **both** GR00T variants (N1.5 and N1.6) — ~100 min and ~$2 of additional AWS spend per variant, so budget ~150–180 min total for the two (the shared `so101-converter`/`leisaac-runtime` builds happen once). Each variant always rebuilds its containers and submits a real `physai run` against the staged fixture (`--max-steps 100`; eval is the long pole at ~57 min). Use `-k n1.5` / `-k n1.6` to run just one variant. Without the flag only Layer 1 runs.
 - The unit tests under `regression/tests/` are local and safe; the runner itself in any mode is not.
 
 Never run these autonomously. Always ask the user first.
@@ -150,7 +151,7 @@ and ask how to proceed — don't silently work from fragments.
 | [docs/en/STATUS.md](docs/en/STATUS.md) | Phase 1 scope and implementation status |
 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | Code style and conventions across all workstreams |
 | [docs/TIMINGS.md](docs/TIMINGS.md) | Command timings and agent decision guide |
-| [regression/README.md](regression/README.md) | Layer-1 regression checks against a live cluster |
+| [regression/README.md](regression/README.md) | Layer 1 + Layer 2 regression checks against a live cluster |
 | [README.md](README.md) | Project overview and quick start |
 
 Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + `.ja.md` suffix.
@@ -194,10 +195,10 @@ Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + 
 
 | File | Role |
 |------|------|
-| `regression/physai_regression/__main__.py` | Entry point: `python -m physai_regression <mode> ...` (modes: `fresh`, `upgrade-existing`, `upgrade-from-ref`) |
+| `regression/physai_regression/__main__.py` | Entry point: `python -m physai_regression <mode> ...` (modes: `fresh`, `upgrade-existing`, `upgrade-from-ref`; mode-orthogonal flag: `--builtin-examples`) |
 | `regression/physai_regression/orchestration/` | `cdk deploy`/`destroy`/stack-discovery wrappers and the lifecycle-mode sequences they compose |
 | `regression/physai_regression/conftest.py` | Session fixtures: `cluster_name` + `data_bucket_name` (CFN), `ssh_config_path` (tempfile), `physai_session`, `physai_cli` (CLI subprocess wrapper), `fake_project_dir`, `fake_containers_built` |
-| `regression/physai_regression/checks/` | Pytest checks; each function is one regression test |
+| `regression/physai_regression/checks/` | Pytest checks; each function is one regression test. Layer 1 (`@pytest.mark.platform`) runs by default; Layer 2 (`@pytest.mark.builtin_example`) runs only with `--builtin-examples` |
 | `regression/fixtures/fake-project/` | Tiny project (`fake-converter`, `fake-trainer`, `fake-evaluator`) that exercises the full pipeline path in seconds |
 | `regression/tests/` | Unit tests for the regression code itself (no AWS/SSH) |
 

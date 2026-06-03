@@ -171,3 +171,69 @@ def test_ssh_config_path_fails_loudly_when_setup_ssh_returns_nonzero(tmp_path: P
         with pytest.raises(pytest.fail.Exception) as excinfo:
             next(gen)
         assert "setup-ssh.sh" in str(excinfo.value)
+
+
+# ── pytest_collection_modifyitems: --raw-source guard ───────────────────────
+
+# These run the guard through *real* pytest collection via the `pytester`
+# fixture rather than calling the hook with mock items. The hook's
+# correctness depends on running after pytest's own ``-m`` deselection
+# (``trylast=True``); a mock-item call can't reproduce that ordering, so it
+# would miss the case where a default ``-m "not builtin_example"`` run
+# wrongly aborts because the Layer 2 item is still in ``items`` at hook time.
+pytest_plugins = ["pytester"]
+
+# Mirrors the regression suite's own pytest.ini: Layer 2 is deselected by
+# default, so an ordinary run must not require --raw-source.
+_GUARD_INI = """
+[pytest]
+addopts = -m "not builtin_example"
+markers =
+    platform: layer 1
+    builtin_example: layer 2
+"""
+
+
+def _make_guard_project(pytester: pytest.Pytester) -> None:
+    pytester.makeini(_GUARD_INI)
+    pytester.makeconftest(
+        "from physai_regression.conftest import (\n"
+        "    pytest_addoption,\n"
+        "    pytest_collection_modifyitems,\n"
+        ")\n"
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.platform
+        def test_layer1():
+            pass
+
+        @pytest.mark.builtin_example
+        def test_layer2():
+            pass
+        """
+    )
+
+
+def test_default_run_does_not_require_raw_source(pytester: pytest.Pytester):
+    """Default run (Layer 2 deselected by ini) must run Layer 1, not abort."""
+    _make_guard_project(pytester)
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1, deselected=1)
+
+
+def test_selecting_builtin_example_without_raw_source_errors(pytester: pytest.Pytester):
+    _make_guard_project(pytester)
+    result = pytester.runpytest("-m", "platform or builtin_example")
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*--raw-source*"])
+
+
+def test_selecting_builtin_example_with_raw_source_runs(pytester: pytest.Pytester):
+    _make_guard_project(pytester)
+    result = pytester.runpytest(
+        "-m", "platform or builtin_example", "--raw-source", "file:///tmp/raw"
+    )
+    result.assert_outcomes(passed=2)

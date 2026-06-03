@@ -45,29 +45,6 @@ def test_upgrade_existing_returns_pytest_rc_on_check_failure(capsys):
     assert "upgraded state" in err
 
 
-def test_upgrade_existing_forwards_args_to_pytest():
-    with (
-        patch("physai_regression.__main__.flows.upgrade_in_place"),
-        patch("physai_regression.__main__.pytest.main", return_value=0) as pmain,
-    ):
-        rc = main(
-            [
-                "upgrade-existing",
-                "--profile",
-                "p",
-                "--region",
-                "r",
-                "-k",
-                "dcvagent",
-            ]
-        )
-    assert rc == 0
-    pmain.assert_called_once()
-    (forwarded,), _ = pmain.call_args
-    assert forwarded[0] == str(CHECKS_DIR)
-    assert forwarded[1:] == ["--profile", "p", "--region", "r", "-k", "dcvagent"]
-
-
 def test_upgrade_existing_does_not_destroy():
     """``upgrade-existing`` operates on a running cluster — never destroys."""
     with (
@@ -118,24 +95,21 @@ def test_fresh_skips_destroy_on_pytest_failure(capsys):
     assert "Cluster left up" in err
 
 
-def test_fresh_forwards_aws_and_extra_args_to_pytest():
-    with (
-        patch("physai_regression.__main__.flows.redeploy_from_clean"),
-        patch("physai_regression.__main__.deploy.cdk_destroy"),
-        patch("physai_regression.__main__.pytest.main", return_value=0) as pmain,
-    ):
-        main(
-            [
-                "fresh",
-                "--profile",
-                "p",
-                "--region",
-                "r",
-                "-k",
-                "dcvagent",
-            ]
-        )
-    (forwarded,), _ = pmain.call_args
+@pytest.mark.parametrize(
+    "argv_prefix",
+    [
+        ["fresh"],
+        ["upgrade-existing"],
+        ["upgrade-from-ref", "--from-ref", "v0.2.0"],
+    ],
+    ids=["fresh", "upgrade-existing", "upgrade-from-ref"],
+)
+def test_aws_and_extra_args_forwarded_to_pytest_for_every_mode(argv_prefix):
+    """``_pytest_args`` is mode-agnostic: every mode forwards CHECKS_DIR,
+    the AWS args, and the user's pytest passthrough in the same order."""
+    forwarded = _captured_pytest_args(
+        argv_prefix + ["--profile", "p", "--region", "r", "-k", "dcvagent"]
+    )
     assert forwarded[0] == str(CHECKS_DIR)
     assert forwarded[1:] == ["--profile", "p", "--region", "r", "-k", "dcvagent"]
 
@@ -268,3 +242,247 @@ def test_missing_mode_is_rejected_by_argparse():
     with pytest.raises(SystemExit) as excinfo:
         main([])
     assert excinfo.value.code == 2
+
+
+# ── --builtin-examples flag plumbing ──────────────────────────────────────
+
+
+def _captured_pytest_args(argv: list[str]) -> list[str]:
+    """Run ``main(argv)`` with all orchestration patched out and return the
+    argv handed to ``pytest.main``.
+
+    Each mode's flow primitive is patched to a no-op so ``pytest.main`` is
+    the only side effect we care about; rc=0 keeps fresh's destroy from
+    erroring.
+    """
+    with (
+        patch("physai_regression.__main__.flows.redeploy_from_clean"),
+        patch("physai_regression.__main__.flows.upgrade_in_place"),
+        patch(
+            "physai_regression.__main__.flows.deploy_from_ref",
+            return_value=_wt_path(),
+        ),
+        patch("physai_regression.__main__.flows.destroy_and_remove_worktree"),
+        patch("physai_regression.__main__.deploy.cdk_destroy"),
+        patch("physai_regression.__main__.pytest.main", return_value=0) as pmain,
+    ):
+        rc = main(argv)
+    assert rc == 0
+    pmain.assert_called_once()
+    (forwarded,), _ = pmain.call_args
+    return forwarded
+
+
+def test_default_run_forwards_neither_marker_selector_nor_raw_source():
+    """Without --builtin-examples the runner adds no ``-m`` override (it
+    relies on pytest.ini's default to exclude Layer 2) and no
+    ``--raw-source``."""
+    forwarded = _captured_pytest_args(
+        ["upgrade-existing", "--profile", "p", "--region", "r"]
+    )
+    assert "-m" not in forwarded
+    assert "--raw-source" not in forwarded
+
+
+def test_builtin_examples_forwards_marker_selector():
+    forwarded = _captured_pytest_args(
+        [
+            "upgrade-existing",
+            "--builtin-examples",
+            "--raw-source",
+            "file:///tmp/raw",
+            "--profile",
+            "p",
+            "--region",
+            "r",
+        ]
+    )
+    assert "-m" in forwarded
+    i = forwarded.index("-m")
+    assert forwarded[i + 1] == "platform or builtin_example"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [
+            "fresh",
+            "--builtin-examples",
+            "--raw-source",
+            "file:///tmp/raw",
+            "--profile",
+            "p",
+        ],
+        [
+            "upgrade-existing",
+            "--builtin-examples",
+            "--raw-source",
+            "file:///tmp/raw",
+            "--profile",
+            "p",
+        ],
+        [
+            "upgrade-from-ref",
+            "--builtin-examples",
+            "--raw-source",
+            "file:///tmp/raw",
+            "--from-ref",
+            "v0.2.0",
+            "--profile",
+            "p",
+        ],
+    ],
+    ids=["fresh", "upgrade-existing", "upgrade-from-ref"],
+)
+def test_builtin_examples_works_for_every_mode(argv: list[str]):
+    """The flag is mode-orthogonal: every mode's checks invocation gets it."""
+    forwarded = _captured_pytest_args(argv)
+    i = forwarded.index("-m")
+    assert forwarded[i + 1] == "platform or builtin_example"
+
+
+def test_builtin_examples_appears_before_extra_pytest_args():
+    """``-m`` selector goes ahead of the user's pytest passthrough so a
+    user-supplied ``-k`` etc. composes with — not overrides — the marker
+    filter."""
+    forwarded = _captured_pytest_args(
+        [
+            "upgrade-existing",
+            "--builtin-examples",
+            "--raw-source",
+            "file:///tmp/raw",
+            "--profile",
+            "p",
+            "-k",
+            "liftcube",
+        ]
+    )
+    i_m = forwarded.index("-m")
+    i_k = forwarded.index("-k")
+    assert i_m < i_k
+
+
+# ── --raw-source flag plumbing ────────────────────────────────────────────
+
+
+def test_raw_source_without_builtin_examples_is_rejected(capsys):
+    """``--raw-source`` is meaningful only when Layer 2 is selected."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            [
+                "upgrade-existing",
+                "--raw-source",
+                "file:///tmp/raw",
+                "--profile",
+                "p",
+            ]
+        )
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--raw-source is only valid with --builtin-examples" in err
+
+
+def test_builtin_examples_without_raw_source_is_rejected(capsys):
+    """Layer 2 needs an explicit fixture URI; reject the flag-without-pair case."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(["upgrade-existing", "--builtin-examples", "--profile", "p"])
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--builtin-examples requires --raw-source" in err
+
+
+def test_malformed_raw_source_uri_is_rejected_before_deploy(capsys):
+    """A bad URI must fail argparse-time, before any cluster operation."""
+    with (
+        patch("physai_regression.__main__.flows.redeploy_from_clean") as redeploy,
+        patch("physai_regression.__main__.pytest.main") as pmain,
+    ):
+        with pytest.raises(SystemExit) as excinfo:
+            main(
+                [
+                    "fresh",
+                    "--builtin-examples",
+                    "--raw-source",
+                    "s4://typo-scheme",
+                    "--profile",
+                    "p",
+                ]
+            )
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "unsupported raw source scheme" in err
+    # The deploy and the checks must never have started.
+    redeploy.assert_not_called()
+    pmain.assert_not_called()
+
+
+def test_builtin_examples_with_raw_source_forwards_uri():
+    forwarded = _captured_pytest_args(
+        [
+            "upgrade-existing",
+            "--builtin-examples",
+            "--raw-source",
+            "s3://bucket/prefix/",
+            "--profile",
+            "p",
+        ]
+    )
+    assert "--raw-source" in forwarded
+    i = forwarded.index("--raw-source")
+    assert forwarded[i + 1] == "s3://bucket/prefix/"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [
+            "fresh",
+            "--builtin-examples",
+            "--raw-source",
+            "hf://owner/repo",
+            "--profile",
+            "p",
+        ],
+        [
+            "upgrade-existing",
+            "--builtin-examples",
+            "--raw-source",
+            "hf://owner/repo",
+            "--profile",
+            "p",
+        ],
+        [
+            "upgrade-from-ref",
+            "--builtin-examples",
+            "--raw-source",
+            "hf://owner/repo",
+            "--from-ref",
+            "v0.2.0",
+            "--profile",
+            "p",
+        ],
+    ],
+    ids=["fresh", "upgrade-existing", "upgrade-from-ref"],
+)
+def test_raw_source_works_for_every_mode(argv: list[str]):
+    forwarded = _captured_pytest_args(argv)
+    i = forwarded.index("--raw-source")
+    assert forwarded[i + 1] == "hf://owner/repo"
+
+
+def test_raw_source_appears_before_extra_pytest_args():
+    """The forwarded ``--raw-source`` precedes user passthrough so an
+    explicit ``-k`` doesn't accidentally insert itself between flag and value."""
+    forwarded = _captured_pytest_args(
+        [
+            "upgrade-existing",
+            "--builtin-examples",
+            "--raw-source",
+            "file:///tmp/raw",
+            "--profile",
+            "p",
+            "-k",
+            "liftcube",
+        ]
+    )
+    assert forwarded.index("--raw-source") < forwarded.index("-k")
