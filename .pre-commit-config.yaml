@@ -61,6 +61,21 @@ repos:
 
   - repo: local
     hooks:
+      - id: ty
+        name: ty (type check)
+        # `python`-language hook: pre-commit builds an isolated venv with
+        # ty plus the runtime deps below, so ty resolves third-party
+        # imports (jsonschema, pyyaml, pytest) from that env. `cd physai`
+        # so `ty.toml`'s relative `extra-paths`/`exclude` resolve. The
+        # whole ruff-checked source tree is passed so a single file's edit
+        # still type-checks against the package it belongs to.
+        entry: bash -c 'cd physai && ty check cli regression infra/lifecycle'
+        language: python
+        additional_dependencies: [ty, jsonschema, pyyaml, pytest]
+        pass_filenames: false
+        files: ^physai/(cli/.*|infra/lifecycle/.*|regression/.*)\.py$
+        types_or: [python]
+
       - id: cli-pytest
         name: cli pytest
         # Plain `pytest` resolves `import physai` through whatever editable

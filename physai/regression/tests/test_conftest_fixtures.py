@@ -18,6 +18,16 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> Magic
     return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _unwrap(fixture):
+    """Return a fixture's underlying function so we can call it directly.
+
+    ``@pytest.fixture`` stores the undecorated function on ``__wrapped__``;
+    the tests call it with explicit args instead of going through pytest's
+    fixture injection.
+    """
+    return fixture.__wrapped__
+
+
 # ── cluster_name ────────────────────────────────────────────────────────────
 
 
@@ -29,7 +39,7 @@ def _request_with(cluster: str | None = None) -> MagicMock:
 
 def test_cluster_name_uses_cli_override_without_calling_aws():
     with patch("physai_regression.conftest.describe_stack") as ds:
-        out = conftest_module.cluster_name.__wrapped__(
+        out = _unwrap(conftest_module.cluster_name)(
             _request_with(cluster="explicit-cluster"),
             aws_profile=None,
             aws_region=None,
@@ -43,7 +53,7 @@ def test_cluster_name_resolves_from_cfn_output():
         "physai_regression.conftest.describe_stack",
         return_value="physai-cluster-abc12345",
     ) as ds:
-        out = conftest_module.cluster_name.__wrapped__(
+        out = _unwrap(conftest_module.cluster_name)(
             _request_with(),
             aws_profile="myprofile",
             aws_region="us-west-2",
@@ -62,7 +72,7 @@ def test_cluster_name_fails_loudly_when_output_empty():
         return_value="",
     ):
         with pytest.raises(pytest.fail.Exception) as excinfo:
-            conftest_module.cluster_name.__wrapped__(
+            _unwrap(conftest_module.cluster_name)(
                 _request_with(),
                 aws_profile=None,
                 aws_region=None,
@@ -76,7 +86,7 @@ def test_cluster_name_fails_loudly_when_stack_not_found():
         side_effect=conftest_module.StackNotFound("no such stack"),
     ):
         with pytest.raises(pytest.fail.Exception) as excinfo:
-            conftest_module.cluster_name.__wrapped__(
+            _unwrap(conftest_module.cluster_name)(
                 _request_with(),
                 aws_profile=None,
                 aws_region=None,
@@ -99,7 +109,7 @@ def test_ssh_config_path_invokes_setup_ssh_with_output_flag(tmp_path: Path):
             return_value=_completed(stdout="ok"),
         ) as run,
     ):
-        gen = conftest_module.ssh_config_path.__wrapped__(
+        gen = _unwrap(conftest_module.ssh_config_path)(
             cluster_name="my-cluster",
             aws_profile="p",
             aws_region="r",
@@ -138,7 +148,7 @@ def test_ssh_config_path_cleans_up_tempfile_after_session(tmp_path: Path):
         patch("physai_regression.conftest.SETUP_SSH", fake_setup),
         patch("physai_regression.conftest.subprocess.run", side_effect=fake_run),
     ):
-        gen = conftest_module.ssh_config_path.__wrapped__(
+        gen = _unwrap(conftest_module.ssh_config_path)(
             cluster_name="c",
             aws_profile=None,
             aws_region=None,
@@ -163,7 +173,7 @@ def test_ssh_config_path_fails_loudly_when_setup_ssh_returns_nonzero(tmp_path: P
             return_value=_completed(returncode=1, stderr="boom"),
         ),
     ):
-        gen = conftest_module.ssh_config_path.__wrapped__(
+        gen = _unwrap(conftest_module.ssh_config_path)(
             cluster_name="c",
             aws_profile=None,
             aws_region=None,

@@ -57,8 +57,8 @@ cd infra && npm install       # installs CDK dependencies
 
 # Pre-commit hooks (config lives at the repo root: ../.pre-commit-config.yaml).
 # Hooks are scoped to physai/ files and split between two stages:
-#   - pre-commit: ruff, cli pytest, regression unit pytest, shellcheck,
-#                 tsc --noEmit, whitespace/EOF/yaml/json
+#   - pre-commit: ruff, ty (type check), cli pytest, regression unit
+#                 pytest, shellcheck, tsc --noEmit, whitespace/EOF/yaml/json
 #   - pre-push:   cdk synth
 pip install pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
@@ -98,6 +98,7 @@ Then pick one of:
 | `infra/` | `cd infra && npm run build` | ~5 s |
 | `infra/` | `cd infra && npm run synth` | ~10 s |
 | `regression/` | `cd regression && python -m pytest tests/` | ~1 s |
+| Python (all) | `pre-commit run ty --all-files` (type-checks `cli/`, `regression/`, `infra/lifecycle/` in pre-commit's managed env) | ~3 s |
 | `examples/` | No automated validation yet | — |
 
 The regression *checks* themselves (`python -m physai_regression fresh ...`, `... upgrade-existing ...`, or `... upgrade-from-ref ...`) talk to a live cluster — see the STOP block above.

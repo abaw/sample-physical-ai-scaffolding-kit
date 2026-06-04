@@ -1,6 +1,7 @@
 """Load ~/.physai/config.yaml and merge with CLI flags."""
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -8,7 +9,7 @@ from .schema import validate
 
 CONFIG_PATH = Path.home() / ".physai" / "config.yaml"
 
-DEFAULTS = {
+DEFAULTS: dict[str, Any] = {
     "host": None,
     "ssh_config": None,
     "model_config_roots": [],
@@ -18,8 +19,8 @@ DEFAULTS = {
 def load(
     host_override: str | None = None,
     ssh_config_override: str | None = None,
-) -> dict:
-    cfg = dict(DEFAULTS)
+) -> dict[str, Any]:
+    cfg: dict[str, Any] = dict(DEFAULTS)
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH) as f:
             file_cfg = yaml.safe_load(f) or {}

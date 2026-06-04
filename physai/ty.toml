@@ -1,0 +1,18 @@
+# Type-checker config for the physai Python sources (cli/, regression/,
+# infra/lifecycle/). Scoped to match `ruff check`.
+#
+# Enforced via the `ty` pre-commit hook (see ../.pre-commit-config.yaml),
+# which installs ty plus the third-party runtime deps into its own
+# isolated environment and runs `ty check` from `physai/`. The hook does
+# NOT install the `physai` package, so the check always runs against this
+# repo's source — never a stale editable install elsewhere on the machine.
+
+[environment]
+# Resolve `physai` (the CLI package) from this repo's source tree. The
+# regression code imports `physai.ssh`; pointing ty here means the check
+# does not depend on `physai` being pip-installed.
+extra-paths = ["cli"]
+
+[src]
+# `cli/build/` is stale setuptools build output, not source.
+exclude = ["**/build/**"]
