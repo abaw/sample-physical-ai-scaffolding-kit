@@ -3,6 +3,7 @@
 # Usage: start_slurm.sh <controller_ips>
 #   controller_ips: comma-separated controller IP addresses
 set -ex
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type controller compute login
 

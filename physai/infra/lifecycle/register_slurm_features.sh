@@ -1,13 +1,13 @@
 #!/bin/bash
 # register_slurm_features.sh — Install systemd service + path unit that
-# self-registers this worker node's Slurm Feature (e.g. "l40s", "a10g") via
+# self-registers this worker node's Slurm Features (e.g. "l40s", "dcv") via
 # `scontrol update`.
 #
 # Runs on compute/worker nodes only. Installs two systemd units:
 #
 #   register-slurm-features.service (oneshot)
 #     - Detects instance type via IMDSv2 and maps it to a feature name
-#     - Runs `scontrol update NodeName=<self> ActiveFeatures=X AvailableFeatures=X`
+#     - Runs `scontrol update NodeName=<self> ActiveFeatures=<gpu>,dcv ...`
 #       with retry (slurmd may not be registered with slurmctld yet)
 #     - Runs at boot (WantedBy=multi-user.target, After=slurmd.service)
 #
@@ -34,6 +34,7 @@
 #
 # Usage: register_slurm_features.sh
 set -exo pipefail
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type compute
 
@@ -47,7 +48,7 @@ SLURM_CONF_WATCH="/var/spool/slurmd/conf-cache/slurm.conf"
 # Write the registration script.
 cat > "$SCRIPT_PATH" << 'SCRIPT_EOF'
 #!/bin/bash
-# Self-register this node's Slurm Feature based on EC2 instance type.
+# Self-register this node's Slurm Features based on EC2 instance type.
 # Installed by register_slurm_features.sh lifecycle script.
 set -eo pipefail
 
@@ -86,7 +87,7 @@ case "$ITYPE" in
 esac
 
 NODENAME=$(hostname -s)
-echo "Registering $NODENAME ($ITYPE) with feature=$FEATURE"
+echo "Registering $NODENAME ($ITYPE) with features=$FEATURE,dcv"
 
 # `scontrol update` can fail for two distinct reasons:
 #   (a) slurm.conf has our NodeName but slurmctld hasn't finished registering
@@ -101,8 +102,8 @@ echo "Registering $NODENAME ($ITYPE) with feature=$FEATURE"
 # registration when HyperPod eventually writes our NodeName entry.
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
     if "$SLURM_BIN" update "NodeName=$NODENAME" \
-        "ActiveFeatures=$FEATURE" "AvailableFeatures=$FEATURE" 2>&1; then
-        echo "Feature registered successfully"
+        "ActiveFeatures=$FEATURE,dcv" "AvailableFeatures=$FEATURE,dcv" 2>&1; then
+        echo "Registration successful"
         exit 0
     fi
     echo "Attempt $attempt failed, retrying in 6s..."

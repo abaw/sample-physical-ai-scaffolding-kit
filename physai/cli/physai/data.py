@@ -56,7 +56,16 @@ def upload(session: Session, category: str, local_path: str) -> None:
             "Recommendation: upload raw data to S3 instead — the Data Repository\n"
             "Association will auto-import it to /fsx/raw/ on first access.\n"
             "Raw data is expected to be a directory of demo files (e.g., HDF5).\n"
-            "  aws s3 cp --recursive <local-dir>/ s3://<data-bucket>/raw/<name>/\n"
+            "  aws s3 cp --recursive \\\n"
+            "    --metadata file-owner=1000,file-group=1000 \\\n"
+            "    <local-dir>/ s3://<data-bucket>/raw/<name>/\n"
+            "\n"
+            "  --metadata sets POSIX ownership on imported files to ubuntu\n"
+            "  (UID/GID 1000 on HyperPod nodes). Without it, FSx imports\n"
+            "  objects as root:root mode 755 — readable for jobs, but not\n"
+            "  deletable via `physai rm`. (The intermediate directory created\n"
+            "  by DRA is still root-owned; clean up via `aws s3 rm` or `sudo\n"
+            "  rm` on the login node.)\n"
         )
         answer = input(f"Proceed with rsync to {session.host}:/fsx/raw/ ? [y/N] ")
         if answer.lower() != "y":
@@ -128,5 +137,19 @@ def rm(session: Session, category: str, name: str, force: bool = False) -> None:
             print("Aborted.")
             return
 
-    session.run(f"rm -rf {path}")
+    try:
+        session.run(f"rm -rf {path}")
+    except RuntimeError as e:
+        msg = str(e)
+        if "Permission denied" in msg:
+            raise SystemExit(
+                f"`rm -rf {path}` failed: {msg}\n"
+                "\n"
+                "Hint: files under /fsx/ may be owned by root if they were imported\n"
+                "from S3 via the FSx DRA without POSIX metadata. The unprivileged\n"
+                "ssh user can't unlink them.\n"
+                "\n"
+                f"To remove anyway, ssh to the login node and run:  sudo rm -rf {path}"
+            )
+        raise
     print(f"Removed {path}")

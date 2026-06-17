@@ -56,6 +56,7 @@ Prescriptive rules for all workstreams. Follow these when writing or modifying c
 - Formatting: singleQuote, tabWidth 2, printWidth 100 (matches parent `.vscode/settings.json`)
 - DO NOT add test frameworks yet — no test infrastructure exists (known gap)
 - DO NOT add eslint — no config exists; rely on `tsc` for correctness
+- DO NOT pass `--region` to `cdk deploy` or `cdk destroy` — the flag is silently accepted and ignored (`cdk deploy --help` doesn't list it; see [aws/aws-cdk#28725](https://github.com/aws/aws-cdk/issues/28725)). Set `AWS_REGION` / `AWS_DEFAULT_REGION` in the parent shell or the subprocess environment instead. `--profile` is documented and works normally. See [AGENTS.md](../AGENTS.md#gotchas-cdk-deploy---region-is-silently-ignored)
 
 ---
 
@@ -71,7 +72,7 @@ These scripts run on HyperPod nodes during cluster creation, orchestrated by
 - Scripts MUST be idempotent and safe to re-run — `run-lifecycle.sh` re-runs them on existing nodes; each re-run should hit an "already installed" fast path when the node is already configured
 - Scripts run as root during node provisioning — no `.root.sh` suffix needed
 - No shellcheck configured in CI — review shell changes manually (known gap). Local `shellcheck -x infra/lifecycle/*.sh` should be clean
-- To apply changes to a running cluster, use `infra/scripts/run-lifecycle.sh` (preferred — works on all node types including the controller). Replacing a node via `scontrol update ... state=fail` also works for workers/login but requires `cdk deploy` first to update the S3 copy. See [`docs/en/DEPLOYMENT.md`](en/DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster-advanced).
+- To apply changes to a running cluster, use `infra/scripts/run-lifecycle.sh` (preferred — works on all node types including the controller). Replacing a node via `scontrol update ... state=fail` also works for workers/login but requires `cdk deploy` first to update the S3 copy. See [`docs/en/DEPLOYMENT.md`](en/DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster).
 
 ---
 

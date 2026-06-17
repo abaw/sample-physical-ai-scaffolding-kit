@@ -5,6 +5,7 @@
 #
 # Usage: configure_slurm_cgroup.sh
 set -ex
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # Login nodes don't need cgroup tracking (no slurmd manages user jobs there).
 require_node_type controller compute

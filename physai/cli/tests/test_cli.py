@@ -22,8 +22,9 @@ def cli_env(monkeypatch):
     # config.load returns the resolved host; we record what it was called with.
     config_load = MagicMock(
         name="config.load",
-        side_effect=lambda host: {
-            "host": host or "cfg-host",
+        side_effect=lambda host_override=None, ssh_config_override=None: {
+            "host": host_override or "cfg-host",
+            "ssh_config": ssh_config_override,
             "model_config_roots": ["/cfg/root"],
         },
     )
@@ -77,19 +78,48 @@ def run_cli(monkeypatch, *argv):
 
 def test_host_at_top_level_survives_to_subcommand(cli_env, monkeypatch):
     run_cli(monkeypatch, "--host", "h1", "status", "5")
-    cli_env["config_load"].assert_called_once_with("h1")
-    cli_env["session_factory"].assert_called_once_with("h1")
+    cli_env["config_load"].assert_called_once_with(
+        host_override="h1", ssh_config_override=None
+    )
+    cli_env["session_factory"].assert_called_once_with("h1", ssh_config=None)
 
 
 def test_host_on_subcommand_wins(cli_env, monkeypatch):
     run_cli(monkeypatch, "--host", "h1", "status", "--host", "h2", "5")
-    cli_env["config_load"].assert_called_once_with("h2")
+    cli_env["config_load"].assert_called_once_with(
+        host_override="h2", ssh_config_override=None
+    )
 
 
 def test_no_host_falls_back_to_config(cli_env, monkeypatch):
     run_cli(monkeypatch, "status", "5")
-    cli_env["config_load"].assert_called_once_with(None)
-    cli_env["session_factory"].assert_called_once_with("cfg-host")
+    cli_env["config_load"].assert_called_once_with(
+        host_override=None, ssh_config_override=None
+    )
+    cli_env["session_factory"].assert_called_once_with("cfg-host", ssh_config=None)
+
+
+def test_ssh_config_at_top_level(cli_env, monkeypatch):
+    run_cli(monkeypatch, "--ssh-config", "/tmp/x", "status", "5")
+    cli_env["config_load"].assert_called_once_with(
+        host_override=None, ssh_config_override="/tmp/x"
+    )
+    cli_env["session_factory"].assert_called_once_with("cfg-host", ssh_config="/tmp/x")
+
+
+def test_ssh_config_on_subcommand_wins(cli_env, monkeypatch):
+    run_cli(
+        monkeypatch,
+        "--ssh-config",
+        "/tmp/x",
+        "status",
+        "--ssh-config",
+        "/tmp/y",
+        "5",
+    )
+    cli_env["config_load"].assert_called_once_with(
+        host_override=None, ssh_config_override="/tmp/y"
+    )
 
 
 # ── build ──
@@ -157,6 +187,7 @@ def test_run_full(cli_env, monkeypatch):
         "max_steps": 500,
         "eval_rounds": 10,
         "visual": True,
+        "visual_timeout": 3600,
         "stream": False,
     }
 

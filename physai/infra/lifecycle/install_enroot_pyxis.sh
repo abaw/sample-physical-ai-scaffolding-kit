@@ -3,6 +3,7 @@
 # Requires Docker to be installed first.
 # Usage: install_enroot_pyxis.sh
 set -ex
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 require_node_type controller compute login
 
@@ -37,15 +38,22 @@ ENROOT_DATA_PATH_BASE=/tmp/enroot/data
 ENROOT_CACHE_PATH=/tmp/enroot
 ENROOT_TEMP_PATH=/tmp
 
-# Use /opt/dlami/nvme if mounted
+# Use /opt/dlami/nvme if mounted, otherwise /tmp.
 if [[ -d /opt/dlami/nvme ]]; then
     ENROOT_RUNTIME_PATH_BASE=/opt/dlami/nvme/tmp/enroot
     ENROOT_DATA_PATH_BASE=/opt/dlami/nvme/tmp/enroot/data
     ENROOT_CACHE_PATH=/opt/dlami/nvme/enroot
     ENROOT_TEMP_PATH=/opt/dlami/nvme/tmp
-    
+
     mkdir -p /opt/dlami/nvme/tmp/enroot/data /opt/dlami/nvme/enroot
     chmod 1777 /opt/dlami/nvme/tmp /opt/dlami/nvme/tmp/enroot /opt/dlami/nvme/tmp/enroot/data /opt/dlami/nvme/enroot
+else
+    # /tmp itself is 1777 from the base AMI, but /tmp/enroot must be created
+    # with the sticky bit too: pyxis runs as the unprivileged Slurm user and
+    # needs to mkdir its own per-uid subdirs (ENROOT_RUNTIME_PATH below
+    # appends $(id -u) to this base).
+    mkdir -p /tmp/enroot/data
+    chmod 1777 /tmp/enroot /tmp/enroot/data
 fi
 
 # Use /fsx for enroot cache if mounted (shared across nodes)

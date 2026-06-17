@@ -256,9 +256,37 @@ def test_eval_stage_sbatch_visual():
         EvalStage,
         cfg={"partition": "gpu", "gres": "gpu:1", "container": "rt", "rounds": 10},
     )
-    ctx = {"checkpoint_dir": "/ckpt", "eval_dir": "/out", "visual": True}
+    ctx = {
+        "checkpoint_dir": "/ckpt",
+        "eval_dir": "/out",
+        "visual": True,
+        "visual_timeout": 3600,
+    }
     sbatch = stage.generate_sbatch(ctx)
     assert "10 --visual\n" in sbatch
+    assert "#SBATCH --constraint=dcv" in sbatch
+    assert "#SBATCH --gres=gpu:1\n" in sbatch
+    assert "flock -w 3600" in sbatch
+    assert "/fsx/physai/dcv-claims/$(hostname).lock" in sbatch
+    assert "dcv_session_setup.sh ${SLURM_JOB_ID}" in sbatch
+    assert "scripts/dcv_session_setup.sh" in sbatch
+    assert "dcv_session_teardown.sh ${SLURM_JOB_ID}' EXIT TERM" in sbatch
+
+
+def test_eval_stage_sbatch_no_visual_no_dcv():
+    """When visual=False, no DCV setup/teardown or flock."""
+    stage = _make_stage(
+        EvalStage,
+        cfg={"partition": "gpu", "gres": "gpu:1", "container": "rt", "rounds": 10},
+    )
+    ctx = {"checkpoint_dir": "/ckpt", "eval_dir": "/out", "visual": False}
+    sbatch = stage.generate_sbatch(ctx)
+    assert "dcv_session_setup" not in sbatch
+    assert "dcv_session_teardown" not in sbatch
+    assert "flock" not in sbatch
+    assert "#SBATCH --gres=gpu:1\n" in sbatch
+    assert "constraint" not in sbatch
+    assert "--visual" not in sbatch
 
 
 def test_eval_stage_sbatch_constraint():
@@ -274,6 +302,27 @@ def test_eval_stage_sbatch_constraint():
     ctx = {"checkpoint_dir": "/ckpt", "eval_dir": "/out"}
     sbatch = stage.generate_sbatch(ctx)
     assert "#SBATCH --constraint=l40s" in sbatch
+
+
+def test_eval_stage_visual_appends_dcv_to_existing_constraint():
+    stage = _make_stage(
+        EvalStage,
+        cfg={
+            "partition": "gpu",
+            "gres": "gpu:1",
+            "constraint": "l40s",
+            "container": "rt",
+            "rounds": 5,
+        },
+    )
+    ctx = {
+        "checkpoint_dir": "/ckpt",
+        "eval_dir": "/out",
+        "visual": True,
+        "visual_timeout": 3600,
+    }
+    sbatch = stage.generate_sbatch(ctx)
+    assert "#SBATCH --constraint=l40s&dcv" in sbatch
 
 
 # ── ConvertStage ──

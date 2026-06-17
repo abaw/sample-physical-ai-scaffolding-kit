@@ -1,0 +1,89 @@
+# Pre-commit hooks for physai/.
+#
+# Scope: hooks here run only on files under `physai/`. Sibling sub-projects
+# (`hyperpod/`, `samples/`, `isaacsim-workstation/`) are excluded.
+#
+# Stages:
+# - `pre-commit` for fast checks (~seconds total). Fires on every `git commit`.
+# - `pre-push`   for slower checks (`cdk synth`). Fires on `git push`.
+#
+# Setup:
+#   pip install pre-commit
+#   pre-commit install --hook-type pre-commit --hook-type pre-push
+default_stages: [pre-commit]
+
+exclude: |
+  (?x)(
+    (^|/)\.ruff_cache/|
+    (^|/)\.mypy_cache/|
+    ^physai/cli/build/|
+    ^physai/infra/dist/|
+    ^physai/infra/cdk\.out/|
+    ^physai/infra/node_modules/|
+    ^physai/infra/package-lock\.json$
+  )
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        files: ^physai/
+      - id: end-of-file-fixer
+        files: ^physai/
+      - id: check-merge-conflict
+        files: ^physai/
+      - id: check-yaml
+        files: ^physai/.*\.(yaml|yml)$
+      - id: check-json
+        files: ^physai/.*\.json$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff
+        name: ruff (check)
+        files: ^physai/(cli/.*|infra/lifecycle/.*)\.py$
+      - id: ruff-format
+        name: ruff (format-check)
+        args: [--check]
+        files: ^physai/(cli/.*|infra/lifecycle/.*)\.py$
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        # `-x` follows sourced files; `--source-path=SCRIPTDIR` lets
+        # `# shellcheck source=...` directives resolve relative to the
+        # script being checked, regardless of pre-commit's cwd.
+        args: [-x, --source-path=SCRIPTDIR]
+        files: ^physai/(infra/lifecycle|infra/scripts|cli/physai/scripts)/.*\.sh$
+
+  - repo: local
+    hooks:
+      - id: cli-pytest
+        name: cli pytest
+        # Plain `pytest` resolves `import physai` through whatever editable
+        # install is on sys.path — which may point at a different worktree.
+        # `python -m pytest` prepends cwd to sys.path, pinning the test run
+        # to this worktree's source. See docs/CONVENTIONS.md.
+        entry: bash -c 'cd physai/cli && python -m pytest -q'
+        language: system
+        pass_filenames: false
+        files: ^physai/cli/.*\.py$
+        types_or: [python]
+
+      - id: infra-tsc
+        name: infra tsc --noEmit
+        entry: bash -c 'cd physai/infra && npx --no-install tsc --noEmit'
+        language: system
+        pass_filenames: false
+        files: ^physai/infra/.*\.(ts|json)$
+
+      - id: infra-cdk-synth
+        name: infra cdk synth
+        entry: bash -c 'cd physai/infra && npm run --silent synth >/dev/null'
+        language: system
+        pass_filenames: false
+        files: ^physai/infra/
+        stages: [pre-push]

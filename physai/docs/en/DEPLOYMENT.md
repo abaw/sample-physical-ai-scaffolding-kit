@@ -68,6 +68,34 @@ npx cdk bootstrap
 npx cdk deploy --all --require-approval never
 ```
 
+### Choosing the AWS account and region
+
+`cdk deploy` and `cdk destroy` read the **profile** from `--profile` but
+read the **region** from the `AWS_REGION` / `AWS_DEFAULT_REGION`
+environment variables — *not* from `--region`. The `--region` flag is
+silently accepted and ignored (see
+[aws/aws-cdk#28725](https://github.com/aws/aws-cdk/issues/28725); `cdk
+deploy --help` does not list it). For an environment-agnostic stack like
+this app's, that means a deploy targets whatever region the parent
+shell's `AWS_REGION` is set to.
+
+Pick the region by setting it in the environment, not on the command
+line:
+
+```bash
+# Pick profile + region for the whole shell session:
+export AWS_PROFILE=myprofile
+export AWS_REGION=us-west-2
+npx cdk deploy --all --require-approval never
+
+# Or one-shot, for a single command:
+AWS_REGION=us-west-2 npx cdk deploy --all --require-approval never --profile myprofile
+```
+
+The `aws` CLI does honor `--region`, so the `aws ...` commands later in
+this doc and in `infra/scripts/cleanup.sh` accept it normally; only `cdk
+deploy`/`destroy` are affected.
+
 **Two CloudFormation stacks are created:**
 
 | Stack | Contents | Termination Protection |
@@ -135,19 +163,39 @@ FSx layout (shared mount at `/fsx/` on all cluster nodes):
 └── physai/         # CLI working state (builds, logs, sync directories)
 ```
 
-### Applying Lifecycle Script Changes to a Running Cluster (Advanced)
+> **Already have a cluster running?** A fresh `cdk deploy` provisions nodes
+> with the current lifecycle scripts, but an **existing** cluster does not pick
+> up lifecycle changes on its own. Any time you pull new changes and want to
+> try them on a cluster you already have, see
+> [Applying Lifecycle Script Changes to a Running Cluster](#applying-lifecycle-script-changes-to-a-running-cluster)
+> below first.
+
+### Applying Lifecycle Script Changes to a Running Cluster
+
+> **Rule of thumb — always do this after pulling new changes.** HyperPod runs
+> the lifecycle scripts under `infra/lifecycle/` **only once, at initial node
+> provisioning.** Any time you pull new changes (or edit a lifecycle script)
+> and want to try them on a cluster you **already have running**, you must
+> first either re-apply the scripts to the existing nodes (below) **or** stand
+> up a fresh cluster. Existing nodes do **not** pick up new scripts on their
+> own — the cluster has already moved past the provisioning step.
+>
+> This bites hardest with features whose setup lives entirely in a lifecycle
+> script. For example, `physai eval --visual` needs the DCV server *and* the
+> `/fsx/physai/dcv-claims/` lock directory, both created by lifecycle scripts;
+> on a cluster created before visual eval landed it fails with errors like
+> `…/dcv-claims/<host>.lock: No such file or directory` until you re-run them.
 
 Lifecycle scripts under `infra/lifecycle/` run when HyperPod first provisions
-a node. If you edit them (or pull upstream changes), **existing nodes don't
-automatically pick up the new scripts** — HyperPod has already moved past the
-"initial provisioning" step.
-
-There are two things you may want:
+a node. After pulling changes there are two things you may want:
 
 1. **Apply the new scripts to existing nodes right now.**
 2. **Make sure future node replacements / scale-outs also use the new scripts.**
 
-Do either or both depending on your need.
+Do either or both depending on your need. The fastest correct default is
+`infra/scripts/run-lifecycle.sh --all` (re-run in place — idempotent, finishes
+in seconds) followed by `npx cdk deploy PhysaiClusterStack` (so future nodes
+match).
 
 #### Re-run scripts in place
 
@@ -251,7 +299,7 @@ Add the snippet to `~/.ssh/config` and test:
 ssh physai-login
 ```
 
-You will be prompted to confirm the host key on the first connection. The ProxyCommand tunnels through SSM, so no security group changes are needed.
+The ProxyCommand tunnels through SSM, so no security group changes are needed. The generated snippet sets `UserKnownHostsFile=/dev/null` and `StrictHostKeyChecking=no` so cluster rotations don't trip the "REMOTE HOST IDENTIFICATION HAS CHANGED" check — AWS auth on the SSM tunnel is what protects the connection.
 
 ## Tearing Down
 

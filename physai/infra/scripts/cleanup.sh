@@ -10,11 +10,18 @@ set -euo pipefail
 
 AWS_ARGS=()
 AWS_ARGS_STR=" --no-cli-pager"
+# `cdk destroy` silently ignores --region (aws/aws-cdk#28725); only --profile
+# is honored. Keep --region for the printed `aws ...` lines but build a
+# separate "for cdk" arg string that omits it. Each cdk line is prefixed
+# inline with `AWS_REGION=<region>` so each printed command stands on its
+# own — copying any single line works without setting state in the shell.
+CDK_ARGS_STR=""
+CDK_ENV_PREFIX=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --profile) AWS_ARGS+=(--profile "$2"); AWS_ARGS_STR+=" --profile $2"; shift 2 ;;
-    --region)  AWS_ARGS+=(--region  "$2"); AWS_ARGS_STR+=" --region $2";  shift 2 ;;
+    --profile) AWS_ARGS+=(--profile "$2"); AWS_ARGS_STR+=" --profile $2"; CDK_ARGS_STR+=" --profile $2"; shift 2 ;;
+    --region)  AWS_ARGS+=(--region  "$2"); AWS_ARGS_STR+=" --region $2";  CDK_ENV_PREFIX="AWS_REGION=$2 "; shift 2 ;;
     -h|--help)
       sed -n 's/^# \{0,1\}//p' "$0" | head -7
       exit 0
@@ -64,8 +71,10 @@ Review each command and run it yourself.
 
 # 1. Destroy PhysaiClusterStack first (HyperPod, IAM, lifecycle bucket).
 #    This releases the cluster's ENIs from the VPC.
+#    cdk destroy silently ignores --region (aws/aws-cdk#28725); the
+#    AWS_REGION= prefix sets it for this command only.
 cd infra
-npx cdk destroy PhysaiClusterStack${AWS_ARGS_STR}
+${CDK_ENV_PREFIX}npx cdk destroy PhysaiClusterStack${CDK_ARGS_STR}
 
 # 2. Delete the retained resources that hold VPC/SG/subnet dependencies.
 #    FSx and RDS keep ENIs in the private subnets and references to the cluster
@@ -93,11 +102,14 @@ aws cloudformation update-termination-protection \\
   --stack-name PhysaiInfraStack --no-enable-termination-protection${AWS_ARGS_STR}
 
 # 5. Destroy PhysaiInfraStack (VPC, SGs, subnets, NAT, etc.).
-npx cdk destroy PhysaiInfraStack${AWS_ARGS_STR}
+${CDK_ENV_PREFIX}npx cdk destroy PhysaiInfraStack${CDK_ARGS_STR}
 
 # 6. Optional: the DB secret is deleted by PhysaiInfraStack destroy, but
-#    Secrets Manager holds it in a 7-30 day recovery window. Run this only if
-#    you need to re-deploy immediately with the same secret name.
+#    Secrets Manager holds it in a 7-30 day recovery window. While the
+#    secret is in that window, redeploying PhysaiInfraStack fails on the
+#    Secret resource with ResourceExistsException (the secret name is
+#    fixed by the stack). Run this only if you need to re-deploy
+#    immediately with the same secret name.
 aws secretsmanager delete-secret --secret-id ${SECRET_ID:-<SECRET_ID>} \\
   --force-delete-without-recovery${AWS_ARGS_STR}
 

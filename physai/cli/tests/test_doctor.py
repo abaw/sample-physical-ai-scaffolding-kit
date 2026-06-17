@@ -41,19 +41,74 @@ def test_check_fsx_dirs_enroot_must_be_sticky():
 
 
 def test_check_fsx_dirs_missing():
+    """A missing dir is an omitted line: `stat 2>/dev/null` emits nothing for
+    it, so we detect it by absence."""
     session = MagicMock()
     first_key = next(iter(doctor.FSX_DIRS))
-    lines = [
-        f"stat: cannot statx '/fsx/{first_key}': No such file or directory",
-        *[
-            f"{mode} directory /fsx/{d}"
-            for d, mode in list(doctor.FSX_DIRS.items())[1:]
-        ],
+    rows = [
+        (mode, "directory", f"/fsx/{d}")
+        for d, mode in doctor.FSX_DIRS.items()
+        if d != first_key
     ]
-    session.run.return_value = "\n".join(lines)
+    session.run.return_value = _stat_out(*rows)
     result = doctor.check_fsx_dirs(session)
     assert result.status == "FAIL"
-    assert "missing" in result.message
+    assert f"/fsx/{first_key}: missing" in result.message
+
+
+def test_check_fsx_dirs_missing_middle_dir():
+    """A dir missing from the middle of the set is named correctly, with no
+    other dir misreported — report accuracy is independent of which dir is
+    missing or where its line falls."""
+    session = MagicMock()
+    keys = list(doctor.FSX_DIRS)
+    missing = keys[len(keys) // 2]  # a middle dir, not the first
+    rows = [
+        (mode, "directory", f"/fsx/{d}")
+        for d, mode in doctor.FSX_DIRS.items()
+        if d != missing
+    ]
+    session.run.return_value = _stat_out(*rows)
+    result = doctor.check_fsx_dirs(session)
+    assert result.status == "FAIL"
+    # Exactly the missing dir is flagged; no other dir is misreported.
+    assert f"/fsx/{missing}: missing" in result.message
+    assert result.message.count("missing") == 1
+    assert "unexpected" not in result.message
+
+
+def test_check_fsx_dirs_tracks_dcv_claims():
+    """The visual-eval lock dir is part of the checked set."""
+    assert "physai/dcv-claims" in doctor.FSX_DIRS
+
+
+def test_check_fsx_dirs_dcv_claims_missing_is_flagged():
+    """A cluster predating visual eval lacks /fsx/physai/dcv-claims; doctor
+    must flag it by name so the user knows to fix (or auto-fix) it."""
+    session = MagicMock()
+    rows = [
+        (mode, "directory", f"/fsx/{d}")
+        for d, mode in doctor.FSX_DIRS.items()
+        if d != "physai/dcv-claims"
+    ]
+    session.run.return_value = _stat_out(*rows)
+    result = doctor.check_fsx_dirs(session)
+    assert result.status == "FAIL"
+    assert "/fsx/physai/dcv-claims: missing" in result.message
+
+
+def test_check_fsx_dirs_not_a_directory_multiword_ftype():
+    """A path that exists but is a file is flagged 'not a directory'. stat's
+    `%F` is multi-word here ('regular file'), which the path-keyed parser must
+    handle by taking mode as the first field and path as the last."""
+    session = MagicMock()
+    first_key = next(iter(doctor.FSX_DIRS))
+    rows = [(mode, "directory", f"/fsx/{d}") for d, mode in doctor.FSX_DIRS.items()]
+    rows[0] = ("644", "regular file", f"/fsx/{first_key}")
+    session.run.return_value = _stat_out(*rows)
+    result = doctor.check_fsx_dirs(session)
+    assert result.status == "FAIL"
+    assert f"/fsx/{first_key}: not a directory (regular file)" in result.message
 
 
 def test_check_fsx_dirs_wrong_mode():

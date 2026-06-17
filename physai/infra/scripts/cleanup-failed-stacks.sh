@@ -43,10 +43,10 @@ done
 aws_ ()  { aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} --no-cli-pager "$@"; }
 aws_q () { aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} --no-cli-pager --output text "$@" 2>/dev/null || true; }
 
-STATUSES="CREATE_FAILED ROLLBACK_COMPLETE ROLLBACK_FAILED"
+STATUSES=(CREATE_FAILED ROLLBACK_COMPLETE ROLLBACK_FAILED)
 
 list_failed() {  # name-contains
-  aws_q cloudformation list-stacks --stack-status-filter $STATUSES \
+  aws_q cloudformation list-stacks --stack-status-filter "${STATUSES[@]}" \
     --query "StackSummaries[?contains(StackName,'$1')].StackName"
 }
 
@@ -85,7 +85,7 @@ print_stack() {
   local r
   r=$(list_retained "$s")
   if [[ -n "$r" ]]; then
-    echo "$r" | sed 's/^/      /'
+    echo "      ${r//$'\n'/$'\n'      }"
   else
     echo "      (no retained resources)"
   fi

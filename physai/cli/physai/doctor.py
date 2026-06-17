@@ -1,5 +1,6 @@
 """`physai doctor` — cluster health checks with interactive fixes."""
 
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -14,6 +15,10 @@ FSX_DIRS: dict[str, str] = {
     "enroot": "1777",  # sticky; set by install_enroot_pyxis.sh so users can't
     # remove each other's named containers
     "physai": "777",
+    "physai/dcv-claims": "777",  # flock targets for `physai eval --visual`;
+    # created by create_fsx_dirs.sh. Missing on clusters provisioned before
+    # visual eval landed — doctor heals it so --visual works without a full
+    # lifecycle re-run.
 }
 CONF_CACHE_FILES = [
     "slurm.conf",
@@ -42,23 +47,31 @@ class Check:
 
 def check_fsx_dirs(session: Session) -> CheckResult:
     paths = " ".join(f"/fsx/{d}" for d in FSX_DIRS)
-    # stat prints one line per arg; `2>&1` so missing dirs still produce a line.
+    # stat emits one `%a %F %n` line per dir that exists; `2>/dev/null || true`
+    # discards errors for missing dirs and the resulting non-zero exit, so we
+    # get a clean stdout of just the dirs that are present.
     try:
-        out = session.run(f"stat -c '%a %F %n' {paths} 2>&1 || true")
+        out = session.run(f"stat -c '%a %F %n' {paths} 2>/dev/null || true")
     except RuntimeError as e:
         return CheckResult("FAIL", f"stat failed: {e}")
+    # Index by path (the `%n` field) so each expected dir is looked up directly;
+    # a dir with no line is missing. `%F` is multi-word for non-directories
+    # ("regular file", "symbolic link"), so mode is the first field, path the
+    # last (paths under /fsx are whitespace-free), and ftype everything between.
+    by_path: dict[str, tuple[str, str]] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[-1].startswith("/fsx/"):
+            mode, ftype, path = parts[0], " ".join(parts[1:-1]), parts[-1]
+            by_path[path] = (mode, ftype)
     bad: list[str] = []
-    lines = out.splitlines()
-    for (d, expected_mode), line in zip(FSX_DIRS.items(), lines):
+    for d, expected_mode in FSX_DIRS.items():
         path = f"/fsx/{d}"
-        if "No such file" in line:
+        info = by_path.get(path)
+        if info is None:
             bad.append(f"{path}: missing")
             continue
-        parts = line.split(" ", 2)
-        if len(parts) < 3 or parts[2] != path:
-            bad.append(f"{path}: unexpected stat output: {line!r}")
-            continue
-        mode, ftype = parts[0], parts[1]
+        mode, ftype = info
         if ftype != "directory":
             bad.append(f"{path}: not a directory ({ftype})")
         elif mode != expected_mode:
@@ -168,6 +181,22 @@ def check_slurmdbd(session: Session) -> CheckResult:
     return CheckResult("PASS")
 
 
+# ── session-manager-plugin (local) ──
+
+
+def check_ssm_plugin(_session: Session) -> CheckResult:
+    """Warn if session-manager-plugin is missing (needed for `physai eval --visual`)."""
+    if shutil.which("session-manager-plugin"):
+        return CheckResult("PASS")
+    return CheckResult(
+        "WARN",
+        "session-manager-plugin not found on PATH.\n"
+        "       Required for `physai eval --visual` (SSM port-forwarding to DCV).\n"
+        "       Install: https://docs.aws.amazon.com/systems-manager/latest/userguide/"
+        "session-manager-working-with-install-plugin.html",
+    )
+
+
 # ── Runner ──
 
 CHECKS: list[Check] = [
@@ -178,6 +207,7 @@ CHECKS: list[Check] = [
         fix_slurm_reconfigure,
     ),
     Check("slurmdbd reachable", check_slurmdbd),
+    Check("session-manager-plugin (for --visual)", check_ssm_plugin),
 ]
 
 

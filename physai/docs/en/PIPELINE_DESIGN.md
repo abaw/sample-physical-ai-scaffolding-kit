@@ -133,9 +133,7 @@ If a container image is currently being built (`physai build` in progress), the 
 
 When augmentation is enabled, the orchestrator runs augmentation and conversion as a single Slurm job on the same GPU node. The augmented HDF5 is written to local NVMe (not `/fsx`), then conversion reads from local NVMe and writes to `/fsx`. The augmented HDF5 — which can be 600GB+ — never touches shared storage and is automatically cleaned up when the job ends.
 
-## 5. Visual Evaluation via DCV — partially implemented
-
-The CLI accepts `--visual` and forwards it to `eval.sh` (which omits `--headless` so Isaac Sim renders), but the surrounding session management — allocating a DCV session on the GPU node, printing the SSM port-forward command, cleaning up on job exit — is not yet automated. The end-to-end UX described below is the target.
+## 5. Visual Evaluation via DCV
 
 `physai eval --visual` streams a rendered simulation viewport to the developer's browser via NICE DCV:
 
@@ -143,22 +141,63 @@ The CLI accepts `--visual` and forwards it to `eval.sh` (which omits `--headless
 $ physai eval --visual --config examples/so101-gr00t/configs/so101_pickorange_gr00t-n1.6.yaml \
   --checkpoint run-20260430-011618
 
-Submitted job 456
-Allocating GPU node...          gpu-worker-3 (i-0abc123def)
-Starting DCV session...         physai-eval-456
+Submitted 1 stage(s): eval
+  Run ID:     run-20260515-030000
+  Reconnect:  physai logs 123
 
-Connect to the DCV session:
-  aws ssm start-session --target i-0abc123def \
-    --document-name AWS-StartPortForwardingSession \
-    --parameters '{"portNumber":["8443"],"localPortNumber":["8443"]}'
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ Visual evaluation is ready on node ip-10-0-12-47.
 
-Then open: https://localhost:8443
-Username: ubuntu          Password: xxxxxxx
+ 1) In a second terminal, open the SSM tunnel and KEEP IT RUNNING:
 
-Streaming eval log (Ctrl-C to detach)...
+    aws ssm start-session \
+      --target sagemaker-cluster:p5bbuyk3t9ag_gpu-workers-i-09fc45686023bcdce \
+      --document-name AWS-StartPortForwardingSession \
+      --parameters '{"portNumber":["8443"],"localPortNumber":["8443"]}' \
+      --region us-west-2
+
+ 2) Open in your browser:
+
+    https://localhost:8443/#console
+
+ 3) Accept the self-signed cert on first connect.
+
+ 4) Sign in with:
+
+    Username: ubuntu
+    Password: xK9mP2qL7nR4vT8w
+
+ Session closes automatically when the job ends (`physai cancel 123`).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[eval] round 1/20 starting...
 ```
 
-The pipeline submits a Slurm job with `--gres=gpu:1,dcv:1`, creates a DCV session, prints the SSM port-forwarding command, and runs `eval.sh` with `--visual`. DCV server is installed on GPU workers via HyperPod lifecycle scripts. SSM port forwarding requires no security group changes.
+### How it works
+
+The DCV `console` session is permanent — `dcvserver` auto-creates it at boot,
+attached to the Xorg display that GDM3 brings up under `ubuntu`'s graphical
+PAM session (auto-login). Per-job setup just rotates `ubuntu`'s PAM password
+to a fresh OTP and prints the connect block.
+
+1. The eval stage's sbatch adds `dcv` to its `--constraint` so Slurm only schedules it on GPU nodes that have DCV configured (the `dcv` feature is registered alongside the GPU type by `register_slurm_features.sh`).
+2. Before `srun`, the sbatch acquires a flock on `/fsx/physai/dcv-claims/<host>.lock` (one visual session per node at a time). A second `--visual` job blocks on flock until the first releases (or until `--visual-timeout`, default 1 hour).
+3. The sbatch sources `dcv_session_setup.sh`:
+   - Resolves the `sagemaker-cluster:<cluster-id>_<group>-<instance-id>` SSM target from `/opt/ml/config/resource_config.json` + IMDSv2.
+   - Generates a one-time password and sets it on the `ubuntu` account via `chpasswd`.
+   - Prints the full connect block (SSM tunnel command + browser URL + credentials).
+4. `srun --container-image=... eval.sh --visual` runs IsaacSim without `--headless`, rendering to Xorg `:0`. DCV captures `:0` and streams it to port 8443.
+5. The developer runs the SSM tunnel in a second terminal, opens the URL, accepts the self-signed cert, and signs in.
+6. On job exit (normal or `physai cancel`), the sbatch `EXIT TERM` trap runs `dcv_session_teardown.sh` which rotates `ubuntu`'s password to a random unguessable value. The `console` session itself stays running for the next job; only fresh logins are blocked. (An already-connected browser tab keeps streaming until the user closes it.) The kernel releases the flock automatically when sbatch exits.
+
+### Infrastructure
+
+- GPU workers run **GDM3 + GNOME** (lifecycle: `install_gdm.sh`) with auto-login as `ubuntu` and screen-lock disabled via dconf. GDM owns Xorg with the NVIDIA driver and headless `DFP-{0..3}` virtual display heads — this is the supported recipe for data-center GPUs (per AWS NICE DCV TAM Runbook). IsaacSim renders into this Xorg session.
+- `dcvserver` runs as an always-on systemd service (lifecycle: `install_dcv.sh`), ordered after `gdm3`. It auto-creates the `console` session at boot owned by `ubuntu`. `nice-dcv-gl` is **not** installed — its GL interception layer conflicts with IsaacSim's CUDA/Vulkan path; console sessions don't need it.
+- The Slurm `dcv` feature is registered on GPU nodes by `register_slurm_features.sh` (alongside the GPU-type feature like `l40s` or `h100`). The pipeline appends `&dcv` to the eval stage's `--constraint` when `--visual` is set.
+- DCV exclusivity uses POSIX `flock(2)` advisory locks on FSx Lustre (`/fsx/physai/dcv-claims/<host>.lock`), held inside the sbatch for the job's lifetime. The kernel releases on any exit, so no stale-claim cleanup is needed. FSx is mounted with `flock` (not `localflock`).
+- IAM policy grants `s3:GetObject` on `arn:aws:s3:::dcv-license.<region>/*` for automatic EC2 licensing.
+- No security group changes — SSM port-forwarding needs no inbound rules.
 
 ## 6. Experiment Tracking (MLflow) — planned, not yet implemented
 
@@ -205,7 +244,7 @@ up edits under `infra/lifecycle/`. Three options, from least to most invasive:
 
 `UpdateClusterSoftware` only reprovisions when the AMI changes; it cannot
 force lifecycle script re-execution on an existing AMI. See
-[DEPLOYMENT.md](DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster-advanced)
+[DEPLOYMENT.md](DEPLOYMENT.md#applying-lifecycle-script-changes-to-a-running-cluster)
 for full workflows.
 
 ## 8. Cost Model

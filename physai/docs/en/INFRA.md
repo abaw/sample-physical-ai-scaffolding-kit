@@ -162,7 +162,8 @@ Every lifecycle script sources `_lib.sh`, which auto-detects the node type from 
 | `install_enroot_pyxis.sh` | All | Enroot + Pyxis + Vulkan ICD hook + NGX patch |
 | `configure_slurm_cgroup.sh` | Controller + Compute | Enable cgroup process tracking for `scancel` |
 | `register_slurm_features.sh` | Compute | Install systemd `.service` + `.path` units that self-register the node's Slurm `Feature` (e.g. `l40s`) via `scontrol update`. The `.path` unit watches `/var/spool/slurmd/conf-cache/slurm.conf` (rewritten by slurmd on every `scontrol reconfigure` in configless mode), so features are re-applied after any reconfigure — necessary because `scontrol update` features don't survive reconfigure in slurmctld's memory. |
-| `install_xorg.sh` | Compute (GPU only) | Xorg for IsaacSim headless rendering |
+| `install_gdm.sh` | Compute (GPU only) | GNOME desktop + GDM3 with auto-login as `ubuntu`, NVIDIA Xorg driver pinned to the kernel module version, headless `xorg.conf` (DFP-{0..3} virtual display heads). The Xorg session is what IsaacSim renders into and what DCV captures for `--visual` evaluation. |
+| `install_dcv.sh` | Compute (GPU only) | NICE DCV server + persistent `console` session owned by `ubuntu` for visual evaluation. See [PIPELINE_DESIGN.md §5](PIPELINE_DESIGN.md#5-visual-evaluation-via-dcv). |
 
 ### Authoring lifecycle scripts: HyperPod timing notes
 

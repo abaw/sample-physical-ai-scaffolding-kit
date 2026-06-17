@@ -15,6 +15,8 @@ from .build import _container_sqsh_exists, _find_active_build_job
 from .schema import validate
 from .ssh import Session
 
+SCRIPTS_DIR = Path(__file__).parent / "scripts"
+
 # Ordered list of all pipeline stages
 ALL_STAGES = ["augment", "convert", "validate", "train", "eval", "register"]
 
@@ -310,15 +312,50 @@ class EvalStage(Stage):
     def prepare(self, ctx: dict) -> None:
         ctx["eval_dir"] = self._eval_dir()
 
+    def metadata(self, ctx: dict) -> JobMetadata:
+        """Add dcv constraint when visual mode is requested."""
+        meta = super().metadata(ctx)
+        if ctx.get("visual"):
+            base = meta.constraint
+            constraint = f"{base}&dcv" if base else "dcv"
+            meta = JobMetadata(
+                name=meta.name,
+                outputs=meta.outputs,
+                partition=meta.partition,
+                gres=meta.gres,
+                constraint=constraint,
+            )
+        return meta
+
     def sbatch_body(self, ctx: dict) -> str:
         container = self.cfg["container"]
         rounds = ctx.get("eval_rounds") or self.cfg.get("rounds", 20)
         visual_flag = " --visual" if ctx.get("visual") else ""
+
+        # DCV session setup runs in host context (before srun / container)
+        visual_setup = ""
+        if ctx.get("visual"):
+            scripts_dir = str(PurePosixPath(self.remote_config).parent / "scripts")
+            timeout = ctx.get("visual_timeout", 3600)
+            visual_setup = f"""\
+# Acquire DCV lock — one visual session per node at a time
+exec 9>/fsx/physai/dcv-claims/$(hostname).lock
+if ! flock -w {timeout} 9; then
+    echo "ERROR: Timed out waiting for DCV slot on $(hostname) after {timeout}s" >&2
+    exit 99
+fi
+
+# DCV session setup (host context, before container)
+trap 'bash {scripts_dir}/dcv_session_teardown.sh ${{SLURM_JOB_ID}}' EXIT TERM
+source {scripts_dir}/dcv_session_setup.sh ${{SLURM_JOB_ID}}
+
+"""
+
         return f"""\
 export RUN_CONFIG={self.remote_config}
 export DISPLAY=${{DISPLAY:-:0}}
 
-srun --container-image=/fsx/enroot/{container}.sqsh \\
+{visual_setup}srun --container-image=/fsx/enroot/{container}.sqsh \\
   --container-mounts=/fsx:/fsx,/tmp/.X11-unix:/tmp/.X11-unix \\
   bash /app/eval.sh \\
     {ctx["checkpoint_dir"]} \\
@@ -423,6 +460,7 @@ def run_pipeline(
     max_steps: int | None = None,
     eval_rounds: int | None = None,
     visual: bool = False,
+    visual_timeout: int = 3600,
     stream: bool = True,
 ) -> None:
     """Submit a pipeline run (one or more stages)."""
@@ -453,6 +491,7 @@ def run_pipeline(
         "max_steps": max_steps,
         "eval_rounds": eval_rounds,
         "visual": visual,
+        "visual_timeout": visual_timeout,
     }
 
     # Run ID and remote paths
@@ -477,6 +516,10 @@ def run_pipeline(
     session.run(f"mkdir -p {sync_dir}")
     session.rsync(str(config_path.resolve()), remote_config)
     session.rsync(f"{local_model_config}/", f"{remote_model_config}/")
+
+    # Upload helper scripts (DCV setup/teardown) if visual eval is in the pipeline
+    if visual:
+        session.rsync(f"{SCRIPTS_DIR}/", f"{sync_dir}/scripts/")
 
     # Pre-flight: validate all stages, verify inputs/outputs, run prepare, and
     # render each stage's sbatch content BEFORE submitting anything. Rendering
@@ -624,6 +667,7 @@ def run_eval(
     model_config_roots: list[Path],
     eval_rounds: int | None = None,
     visual: bool = False,
+    visual_timeout: int = 3600,
     stream: bool = True,
 ) -> None:
     """Shortcut: physai eval ≡ physai run --from eval --to eval."""
@@ -636,6 +680,7 @@ def run_eval(
         checkpoint=checkpoint,
         eval_rounds=eval_rounds,
         visual=visual,
+        visual_timeout=visual_timeout,
         stream=stream,
     )
 

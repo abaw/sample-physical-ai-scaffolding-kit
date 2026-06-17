@@ -16,6 +16,11 @@ def main():
     common.add_argument(
         "--host", default=argparse.SUPPRESS, help="SSH host (overrides config)"
     )
+    common.add_argument(
+        "--ssh-config",
+        default=argparse.SUPPRESS,
+        help="Path to an OpenSSH config file (overrides config)",
+    )
 
     parser = argparse.ArgumentParser(
         prog="physai",
@@ -48,6 +53,12 @@ def main():
     p_run.add_argument("--eval-rounds", type=int, help="Override stages.eval.rounds")
     p_run.add_argument(
         "--visual", action="store_true", help="Render eval to DCV display"
+    )
+    p_run.add_argument(
+        "--visual-timeout",
+        type=int,
+        default=3600,
+        help="Seconds to wait for DCV slot (default: 3600). Only used with --visual.",
     )
     p_run.add_argument(
         "--model-config-root",
@@ -85,6 +96,12 @@ def main():
         "--checkpoint", required=True, help="Checkpoint name on cluster"
     )
     p_eval.add_argument("--visual", action="store_true", help="Render to DCV display")
+    p_eval.add_argument(
+        "--visual-timeout",
+        type=int,
+        default=3600,
+        help="Seconds to wait for DCV slot (default: 3600). Only used with --visual.",
+    )
     p_eval.add_argument("--eval-rounds", type=int, help="Override stages.eval.rounds")
     p_eval.add_argument(
         "--model-config-root",
@@ -193,8 +210,11 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    cfg = config.load(getattr(args, "host", None))
-    session = Session(cfg["host"])
+    cfg = config.load(
+        host_override=getattr(args, "host", None),
+        ssh_config_override=getattr(args, "ssh_config", None),
+    )
+    session = Session(cfg["host"], ssh_config=cfg.get("ssh_config"))
 
     if args.command == "build":
         build.run_build(
@@ -216,6 +236,7 @@ def main():
             max_steps=args.max_steps,
             eval_rounds=args.eval_rounds,
             visual=args.visual,
+            visual_timeout=args.visual_timeout,
             stream=not args.no_stream,
         )
     elif args.command == "train":
@@ -241,6 +262,7 @@ def main():
             model_config_roots=roots,
             eval_rounds=args.eval_rounds,
             visual=args.visual,
+            visual_timeout=args.visual_timeout,
             stream=not args.no_stream,
         )
     elif args.command == "convert":

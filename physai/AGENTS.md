@@ -28,6 +28,15 @@ Do NOT run these commands without explicit user approval:
 Never run these autonomously. Always ask the user first.
 See [docs/TIMINGS.md](docs/TIMINGS.md) for the full decision guide.
 
+**Tearing down the deployment.** Don't reach for raw `cdk destroy` on
+`PhysaiInfraStack` — termination protection is on, and FSx/RDS/S3 are
+RETAINed by CloudFormation so a naive destroy fails halfway and leaves
+the stack stuck. Run `infra/scripts/cleanup.sh --profile <p> --region <r>`,
+which prints the full ordered teardown procedure (cluster destroy →
+empty FSx/RDS → S3 → disable termination protection → infra destroy →
+optional secret force-delete). The script doesn't execute anything; it
+just emits the commands for the user to review and run.
+
 ---
 
 ## Quick Verification Commands
@@ -40,7 +49,40 @@ First-time setup (run once):
 ```bash
 pip install -e "cli[dev]"     # installs physai CLI + ruff + pytest
 cd infra && npm install       # installs CDK dependencies
+
+# Pre-commit hooks (config lives at the repo root: ../.pre-commit-config.yaml).
+# Hooks are scoped to physai/ files and split between two stages:
+#   - pre-commit: ruff, pytest, shellcheck, tsc --noEmit, whitespace/EOF/yaml/json
+#   - pre-push:   cdk synth
+pip install pre-commit
+pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
+
+If `pre-commit install` errors with **"Cowardly refusing to install hooks
+with `core.hooksPath` set"**, another tool on your machine is managing git
+hooks via a system- or global-level `core.hooksPath`. Find it with:
+
+```bash
+git config --show-origin --get-all core.hooksPath
+```
+
+Then pick one of:
+
+1. **Chain via the other tool.** If it documents a way to invoke local
+   `.git/hooks/*`, install pre-commit with `GIT_CONFIG=/dev/null` so it
+   ignores the system setting during install only:
+   ```bash
+   GIT_CONFIG=/dev/null pre-commit install --hook-type pre-commit --hook-type pre-push
+   ```
+   The other tool's hook then runs first and delegates to the pre-commit
+   script in `.git/hooks/`.
+2. **Use Git 2.54+ config-based hooks.** `git hook list pre-commit` should
+   show both; see `git help hook`.
+3. **Skip git wiring; run manually.** No install — invoke before pushing:
+   ```bash
+   pre-commit run --all-files
+   pre-commit run --all-files --hook-stage pre-push
+   ```
 
 | Workstream | Command | Duration |
 |------------|---------|----------|
@@ -129,6 +171,7 @@ Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + 
 | `infra/lifecycle/lifecycle_script.py` | Lifecycle orchestrator (Python, runs all scripts in order) |
 | `infra/lifecycle/_lib.sh` | Shared node-type detection + `require_node_type` guard |
 | `infra/scripts/run-lifecycle.sh` | Re-run lifecycle scripts on existing nodes via SSM |
+| `infra/scripts/cleanup.sh` | Print the ordered teardown procedure for the deployment (does not execute) |
 
 ### `examples/` — Container Definitions
 
@@ -183,6 +226,28 @@ cluster:
 The canonical implementation of all four points is in
 `infra/scripts/run-lifecycle.sh` (see `run_on_node()`). If you're writing a
 new SSM-based tool, copy that pattern rather than rolling your own.
+
+---
+
+## Gotchas: `cdk deploy --region` is silently ignored
+
+`cdk deploy` and `cdk destroy` do not honor `--region` despite the
+top-level `cdk` parser accepting it (the flag is parsed and discarded;
+see [aws/aws-cdk#28725](https://github.com/aws/aws-cdk/issues/28725) and
+`cdk deploy --help`, which does not list it). For environment-agnostic
+stacks like this app's, the deploy region is resolved from
+`AWS_REGION` / `AWS_DEFAULT_REGION` in the parent shell, falling back to
+the profile's `region` setting. `--profile` works as documented.
+
+Practical rules when scripting around `cdk`:
+
+- Pass the target region in the subprocess **environment**, not on the
+  argv: `env={"AWS_REGION": region, "AWS_DEFAULT_REGION": region, ...}`.
+- The `aws` CLI does honor `--region` correctly — only `cdk` is special.
+  Use `--region` freely on `aws cloudformation`, `aws s3`, etc.
+- When generating commands for a human to copy-paste (e.g.
+  `infra/scripts/cleanup.sh`), emit `export AWS_REGION=<region>` before
+  the `cdk` line rather than appending `--region` to the cdk command.
 
 ---
 

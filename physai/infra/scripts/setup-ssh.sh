@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Set up SSH access to the HyperPod login node by uploading a public key via SSM.
-# Usage: setup-ssh.sh [--cluster NAME] [--key PATH] [--profile PROFILE] [--region REGION]
+# Usage: setup-ssh.sh [--cluster NAME] [--key PATH] [--profile PROFILE] [--region REGION] [--output FILE]
 set -euo pipefail
 
 CLUSTER=""
 KEY=""
+OUTPUT=""
 AWS_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cluster) CLUSTER="$2"; shift 2 ;;
     --key) KEY="$2"; shift 2 ;;
+    --output) OUTPUT="$2"; shift 2 ;;
     --profile) AWS_ARGS+=(--profile "$2"); shift 2 ;;
     --region) AWS_ARGS+=(--region "$2"); shift 2 ;;
     -h|--help)
@@ -49,6 +51,7 @@ echo "Using key: $KEY"
 # Resolve cluster name from PhysaiClusterStack if not specified
 if [[ -z "$CLUSTER" ]]; then
   echo -n "Querying PhysaiClusterStack for cluster name...  "
+  # shellcheck disable=SC2016  # backticks here are JMESPath literals, not shell substitution
   CLUSTER=$(aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} cloudformation describe-stacks --stack-name PhysaiClusterStack \
     --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text 2>/dev/null || echo "")
   if [[ -z "$CLUSTER" || "$CLUSTER" == "None" ]]; then
@@ -65,6 +68,7 @@ fi
 
 # Find login node
 echo -n "Finding login node...  "
+# shellcheck disable=SC2016  # backticks here are JMESPath literals, not shell substitution
 LOGIN_ID=$(aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} sagemaker list-cluster-nodes --cluster-name "$CLUSTER" \
   --query 'ClusterNodeSummaries[?InstanceGroupName==`login-group`].InstanceId' --output text)
 if [[ -z "$LOGIN_ID" || "$LOGIN_ID" == "None" ]]; then
@@ -88,7 +92,7 @@ aws ${AWS_ARGS[@]+"${AWS_ARGS[@]}"} ssm start-session --target "$SSM_TARGET" \
   >/dev/null
 echo "done"
 
-# Print SSH config snippet
+# Print or write SSH config snippet
 PROFILE_ARG=""
 REGION_ARG=""
 for ((i=0; i<${#AWS_ARGS[@]}; i+=2)); do
@@ -96,13 +100,42 @@ for ((i=0; i<${#AWS_ARGS[@]}; i+=2)); do
   [[ "${AWS_ARGS[i]}" == "--region" ]] && REGION_ARG=" --region ${AWS_ARGS[i+1]}"
 done
 
-cat <<EOF
+# Why disable host-key checking here:
+# The connection tunnels through `aws ssm start-session` (AWS-StartSSHSession),
+# so AWS auth on the SSM tunnel is what protects the session — SSH host-key
+# verification adds nothing.
+# - `StrictHostKeyChecking no` skips the "authenticity of host can't be
+#   established" prompt on first connect (non-interactive runners can't answer
+#   it).
+# - `UserKnownHostsFile /dev/null` prevents an entry from being recorded, so a
+#   later cluster rotation reusing the `physai-login` alias doesn't trip
+#   "REMOTE HOST IDENTIFICATION HAS CHANGED" against the previous cluster's
+#   key.
+# - `LogLevel ERROR` silences the "Permanently added ... to the list of known
+#   hosts" warning that would otherwise print on every connect.
+if [[ -n "$OUTPUT" ]]; then
+  cat > "$OUTPUT" <<EOF
+Host physai-login
+  User ubuntu
+  ProxyCommand aws ssm start-session --target ${SSM_TARGET}${REGION_ARG}${PROFILE_ARG} --document-name AWS-StartSSHSession --parameters portNumber=%p
+  UserKnownHostsFile /dev/null
+  StrictHostKeyChecking no
+  LogLevel ERROR
+EOF
+  echo "Wrote SSH config to: $OUTPUT"
+  echo "Then test: ssh -F $OUTPUT physai-login"
+else
+  cat <<EOF
 
 Add this to ~/.ssh/config:
 
   Host physai-login
     User ubuntu
     ProxyCommand aws ssm start-session --target ${SSM_TARGET}${REGION_ARG}${PROFILE_ARG} --document-name AWS-StartSSHSession --parameters portNumber=%p
+    UserKnownHostsFile /dev/null
+    StrictHostKeyChecking no
+    LogLevel ERROR
 
 Then test: ssh physai-login
 EOF
+fi

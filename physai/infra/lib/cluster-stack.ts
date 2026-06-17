@@ -160,6 +160,15 @@ export class ClusterStack extends cdk.Stack {
 
     dbSecret.grantRead(executionRole);
 
+    // DCV license bucket (automatic EC2 licensing)
+    executionRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'DcvLicense',
+        actions: ['s3:GetObject'],
+        resources: [`arn:aws:s3:::dcv-license.${this.region}/*`],
+      }),
+    );
+
     // CloudWatch Logs for cluster
     executionRole.addToPolicy(
       new iam.PolicyStatement({

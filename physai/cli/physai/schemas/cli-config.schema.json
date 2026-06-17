@@ -9,6 +9,10 @@
       "type": "string",
       "description": "SSH host alias or address for the HyperPod login node. Required at runtime unless --host is passed."
     },
+    "ssh_config": {
+      "type": "string",
+      "description": "Optional path to an OpenSSH-format config file. When set, every ssh and rsync invocation made by the CLI passes -F <path>, so the user's ~/.ssh/config is not required. A leading ~ is expanded."
+    },
     "model_config_roots": {
       "type": "array",
       "items": { "type": "string" },

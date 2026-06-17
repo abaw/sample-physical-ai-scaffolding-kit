@@ -27,10 +27,13 @@ Reference for every command an agent might run. Check here before executing anyt
 | `infra/scripts/run-lifecycle.sh --dry-run ...` | seconds | local (+ AWS read-only) | yes | YES |
 | `infra/scripts/run-lifecycle.sh --node ... --script ...` | seconds–minutes | cluster (via SSM) | yes | **ASK** — modifies node state (but idempotent) |
 | `infra/scripts/run-lifecycle.sh --all` | ~1 min (no-op) to 10+ min (first install) | cluster (via SSM) | yes | **ASK** — modifies every node |
+| `infra/scripts/cleanup.sh ...` | seconds | local (+ AWS read-only) | yes | YES — prints commands only; does not execute. Use this to discover the correct teardown order before running any `cdk destroy`/`aws ... delete-*` |
 | ⚠️ `npx cdk bootstrap` | **~2 min** | AWS account | yes | **NO** — modifies account state |
 | ⚠️ `npx cdk deploy --all` | **~20 min** | AWS | yes | **NO** — creates/modifies AWS resources |
 | ⚠️ `physai build <container>` | **10–30+ min** | HyperPod cluster | yes (without `-n`) | **NO** — submits Slurm job |
 | ⚠️ `physai run --config ...` | **hours** | HyperPod cluster | yes (without `-n`) | **NO** — submits training/eval pipeline |
+| ⚠️ `physai eval --visual ...` | **minutes–hours** | HyperPod cluster | yes (without `-n`) | **NO** — submits an eval job and holds a DCV slot on a GPU node |
+| `aws ssm start-session ... AWS-StartPortForwardingSession` (DCV tunnel) | runs until killed | local | yes (foreground) | **ASK** — long-lived tunnel; run in background and stop it when done |
 
 ---
 
@@ -53,8 +56,12 @@ repo root (`physai/`) unless they include an explicit `cd`.
   → ⚠️ **STOP.** Ask the user. `physai build` submits a Slurm job on the cluster.
 - **Need to run a pipeline?**
   → ⚠️ **STOP.** Ask the user. `physai run` can take hours.
+- **Need to test visual evaluation (`physai eval --visual`)?**
+  → ⚠️ **STOP.** Ask the user. Submits an eval Slurm job AND holds the GPU node's DCV flock until the job ends. Browser verification needs a live SSM tunnel — run it with `run_in_background` and stop the task when done so you don't leave it open.
 - **Need to re-run lifecycle scripts on the cluster?**
   → ⚠️ **STOP.** Ask the user. `run-lifecycle.sh` is idempotent and safe, but it modifies live node state. Use `--dry-run` freely to preview.
+- **Need to tear down the deployment?**
+  → ⚠️ **STOP.** Ask the user. Don't run raw `cdk destroy PhysaiInfraStack` — termination protection is on, and FSx/RDS/S3 are RETAINed by CloudFormation, so a naive destroy fails halfway. Run `infra/scripts/cleanup.sh --profile <p> --region <r>` first to print the ordered teardown procedure (cluster destroy → FSx/RDS/S3 → disable termination protection → infra destroy → optional secret force-delete). The script prints commands only; review and run them yourself.
 
 ---
 

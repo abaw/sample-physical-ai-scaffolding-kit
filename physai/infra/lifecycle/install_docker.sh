@@ -5,6 +5,7 @@
 # skips the work if so. Safe to re-run. Restarts docker/containerd only if
 # something actually changed.
 set -exo pipefail
+# shellcheck source=_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
 # Suppress debconf "unable to initialize frontend: Dialog/Readline/Teletype"

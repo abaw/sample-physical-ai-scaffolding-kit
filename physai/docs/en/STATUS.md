@@ -24,7 +24,7 @@ Containers are built via the container build system (see [`PIPELINE_DEVELOP.md` 
 
 **IsaacSim-specific notes**:
 - `leisaac-runtime` includes a `50-warmup.sh` setup hook that warms up IsaacSim shader caches during build (equivalent to [upstream warmup.sh](https://github.com/isaac-sim/IsaacSim/blob/main/source/scripts/warmup.sh)). Uses `kit_app.py` instead of the `kit` binary since the pip-installed IsaacSim only ships `kit-gcov` which requires the standalone distribution layout.
-- Evaluation jobs need `DISPLAY=:0` and `/tmp/.X11-unix` mounted — IsaacSim requires GLFW/GLX even in headless mode. Xorg is installed on GPU nodes via lifecycle scripts (`install_xorg.sh`).
+- Evaluation jobs need `DISPLAY=:0` and `/tmp/.X11-unix` mounted — IsaacSim requires GLFW/GLX even in headless mode. GPU nodes run GDM3 with auto-login as `ubuntu` (lifecycle: `install_gdm.sh`); GDM owns Xorg with the NVIDIA driver and headless `DFP-{0..3}` virtual display heads, which IsaacSim renders into and DCV captures for `--visual` eval.
 - `PYTHONUNBUFFERED=1` is required for `policy_inference.py` output to be captured through `tee`.
 
 ### run_config.yaml
@@ -314,6 +314,13 @@ Model config directory is reused since the robot is unchanged.
 - Slurm accounting (`sacct`) via RDS MariaDB
 - `physai logs <job-id>` streams with Ctrl-C detach
 
+#### Visual Evaluation (DCV)
+
+- `physai eval --visual` rotates a one-time password on the GPU node's `ubuntu` account, prints the SSM port-forward command + browser URL + credentials, and rotates the password to a random unguessable value when the job ends. The persistent `console` DCV session and GDM-backed Xorg are provisioned at boot by lifecycle scripts (`install_gdm.sh` + `install_dcv.sh`)
+- Per-node exclusivity uses POSIX `flock` on `/fsx/physai/dcv-claims/<host>.lock` — a second `--visual` job blocks (up to `--visual-timeout`, default 1 hour) until the first releases. Routing uses Slurm's `--constraint=...&dcv` rather than a GRES
+- Setup/teardown runs in sbatch host context (before/after the container); `eval.sh` is unchanged
+- `physai doctor` checks for `session-manager-plugin` on the developer machine
+
 ### Not yet implemented
 
 #### Next up (blocking full pipeline)
@@ -323,10 +330,6 @@ Model config directory is reused since the robot is unchanged.
 - `train.sh` output contract — define `train_summary.json` (final loss, steps, checkpoint paths) so `register` can consume training outputs; currently `train.sh` only writes model checkpoints
 - Export stage outputs to S3 — datasets, checkpoints, evaluations under `/fsx/` should be published to `s3://<data-bucket>/{datasets,checkpoints,results}/` at the end of each stage. The pipeline orchestrator performs the export explicitly (e.g., `aws s3 cp`); it is NOT done via FSx data-repository export. `/fsx/` is treated as working storage only.
 - MLflow tracking server in CDK
-
-#### Planned
-
-- DCV visual evaluation (`physai eval --visual`) — the CLI currently accepts `--visual` and passes it to `eval.sh` (which omits `--headless` so Isaac Sim renders), but the surrounding DCV session management (allocating a DCV session on the GPU node, printing the SSM port-forward command, cleaning up on job exit) is not yet automated.
 
 #### Stretch
 
