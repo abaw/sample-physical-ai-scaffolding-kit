@@ -120,6 +120,13 @@ def main():
     # 3. Start Slurm
     run("./start_slurm.sh", ",".join(controller_ips), env=env)
 
+    # 3b. Install the controller-side watcher that re-applies the HyperPod
+    #     Slurm 25.11 topology workaround whenever the cluster agent
+    #     regenerates slurm.conf (controller-only; self-guarded). start_slurm.sh
+    #     already applied it once before the first start; this keeps it applied
+    #     if the agent later rewrites slurm.conf.
+    run("./install_topology_watcher.sh", env=env)
+
     # 4. Install Docker + Enroot + Pyxis
     run("./install_docker.sh", env=env)
     run("./install_enroot_pyxis.sh", env=env)
