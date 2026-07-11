@@ -43,11 +43,11 @@ repos:
     hooks:
       - id: ruff
         name: ruff (check)
-        files: ^physai/(cli/.*|infra/lifecycle/.*)\.py$
+        files: ^physai/(cli/.*|infra/lifecycle/.*|regression/.*)\.py$
       - id: ruff-format
         name: ruff (format-check)
         args: [--check]
-        files: ^physai/(cli/.*|infra/lifecycle/.*)\.py$
+        files: ^physai/(cli/.*|infra/lifecycle/.*|regression/.*)\.py$
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.10.0.1
@@ -61,6 +61,21 @@ repos:
 
   - repo: local
     hooks:
+      - id: ty
+        name: ty (type check)
+        # `python`-language hook: pre-commit builds an isolated venv with
+        # ty plus the runtime deps below, so ty resolves third-party
+        # imports (jsonschema, pyyaml, pytest) from that env. `cd physai`
+        # so `ty.toml`'s relative `extra-paths`/`exclude` resolve. The
+        # whole ruff-checked source tree is passed so a single file's edit
+        # still type-checks against the package it belongs to.
+        entry: bash -c 'cd physai && ty check cli regression infra/lifecycle'
+        language: python
+        additional_dependencies: [ty, jsonschema, pyyaml, pytest]
+        pass_filenames: false
+        files: ^physai/(cli/.*|infra/lifecycle/.*|regression/.*)\.py$
+        types_or: [python]
+
       - id: cli-pytest
         name: cli pytest
         # Plain `pytest` resolves `import physai` through whatever editable
@@ -71,6 +86,16 @@ repos:
         language: system
         pass_filenames: false
         files: ^physai/cli/.*\.py$
+        types_or: [python]
+
+      - id: regression-pytest
+        name: regression pytest (unit)
+        # Only the unit tests under `tests/` — the checks under `checks/`
+        # talk to a live cluster and aren't safe for pre-commit.
+        entry: bash -c 'cd physai/regression && python -m pytest -q tests/'
+        language: system
+        pass_filenames: false
+        files: ^physai/regression/.*\.py$
         types_or: [python]
 
       - id: infra-tsc

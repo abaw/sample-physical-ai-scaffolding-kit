@@ -24,6 +24,11 @@ Do NOT run these commands without explicit user approval:
 - **`physai run --config ...`** — hours, submits training/eval pipeline
 - **`npx cdk bootstrap`** — ~2 min, modifies AWS account state
 - **`infra/scripts/run-lifecycle.sh --all` (or `--node`/`--group` without `--dry-run`)** — modifies live node state on the cluster via SSM. Idempotent and safe, but still a state change — confirm before running. `--dry-run` is always safe.
+- **`python -m physai_regression fresh ...`** — `cdk destroy PhysaiClusterStack` → `cdk deploy` → checks → `cdk destroy` on pass. ~25 min wall time, AWS spend, and any in-flight Slurm jobs are lost when the stack is destroyed.
+- **`python -m physai_regression upgrade-existing ...`** — Applies the in-place upgrade (`cdk deploy PhysaiClusterStack` + `run-lifecycle.sh --all`) to a user-managed cluster, then runs the platform check suite. ~13 min wall time. Modifies the user's running cluster's lifecycle state and re-uploads scripts to S3; on check failure the cluster is left in the upgraded state with no automated rollback.
+- **`python -m physai_regression upgrade-from-ref --from-ref <ref> ...`** — Ephemeral fresh deploy from `<ref>`, upgrade to HEAD, run the platform check suite, then destroy + worktree cleanup. ~35 min wall time, AWS spend, and on failure leaves both a running cluster and a `git worktree` on disk for inspection.
+- **Adding `--builtin-examples` to any mode** — Adds the Layer 2 shipped-example checks on top of the Layer 1 platform checks. Requires `--raw-source <URI>` (`file:///abs/path` | `s3://bucket[/prefix/]` | `hf://owner/repo[@rev]`); the cluster wipes `/fsx/raw/<base>-<timestamp>/` and re-fetches every run, so the staged directory is replaced each time. Example: `python -m physai_regression upgrade-existing --builtin-examples --raw-source file:///path/to/raw/ --profile ... --region ...`. Today this runs the `so101-gr00t/` example for **both** GR00T variants (N1.5 and N1.6) — ~100 min and ~$2 of additional AWS spend per variant, so budget ~150–180 min total for the two (the shared `so101-converter`/`leisaac-runtime` builds happen once). Each variant always rebuilds its containers and submits a real `physai run` against the staged fixture (`--max-steps 100`; eval is the long pole at ~57 min). Use `-k n1.5` / `-k n1.6` to run just one variant. Without the flag only Layer 1 runs.
+- The unit tests under `regression/tests/` are local and safe; the runner itself in any mode is not.
 
 Never run these autonomously. Always ask the user first.
 See [docs/TIMINGS.md](docs/TIMINGS.md) for the full decision guide.
@@ -52,7 +57,8 @@ cd infra && npm install       # installs CDK dependencies
 
 # Pre-commit hooks (config lives at the repo root: ../.pre-commit-config.yaml).
 # Hooks are scoped to physai/ files and split between two stages:
-#   - pre-commit: ruff, pytest, shellcheck, tsc --noEmit, whitespace/EOF/yaml/json
+#   - pre-commit: ruff, ty (type check), cli pytest, regression unit
+#                 pytest, shellcheck, tsc --noEmit, whitespace/EOF/yaml/json
 #   - pre-push:   cdk synth
 pip install pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
@@ -91,7 +97,11 @@ Then pick one of:
 | `cli/` | `cd cli && ruff format` | ~1 s |
 | `infra/` | `cd infra && npm run build` | ~5 s |
 | `infra/` | `cd infra && npm run synth` | ~10 s |
+| `regression/` | `cd regression && python -m pytest tests/` | ~1 s |
+| Python (all) | `pre-commit run ty --all-files` (type-checks `cli/`, `regression/`, `infra/lifecycle/` in pre-commit's managed env) | ~3 s |
 | `examples/` | No automated validation yet | — |
+
+The regression *checks* themselves (`python -m physai_regression fresh ...`, `... upgrade-existing ...`, or `... upgrade-from-ref ...`) talk to a live cluster — see the STOP block above.
 
 ---
 
@@ -142,6 +152,7 @@ and ask how to proceed — don't silently work from fragments.
 | [docs/en/STATUS.md](docs/en/STATUS.md) | Phase 1 scope and implementation status |
 | [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | Code style and conventions across all workstreams |
 | [docs/TIMINGS.md](docs/TIMINGS.md) | Command timings and agent decision guide |
+| [regression/README.md](regression/README.md) | Layer 1 + Layer 2 regression checks against a live cluster |
 | [README.md](README.md) | Project overview and quick start |
 
 Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + `.ja.md` suffix.
@@ -180,6 +191,17 @@ Japanese counterparts live under [docs/ja/](docs/ja/) with the same filenames + 
 | `examples/so101-gr00t/project.yaml` | Shared container config (base image, env vars) |
 | `examples/so101-gr00t/containers/*/container.yaml` | Per-container build spec (name, partition, gres) |
 | `examples/so101-gr00t/configs/*.yaml` | Run configs for pipeline jobs |
+
+### `regression/` — Live-Cluster Regression Checks
+
+| File | Role |
+|------|------|
+| `regression/physai_regression/__main__.py` | Entry point: `python -m physai_regression <mode> ...` (modes: `fresh`, `upgrade-existing`, `upgrade-from-ref`; mode-orthogonal flag: `--builtin-examples`) |
+| `regression/physai_regression/orchestration/` | `cdk deploy`/`destroy`/stack-discovery wrappers and the lifecycle-mode sequences they compose |
+| `regression/physai_regression/conftest.py` | Session fixtures: `cluster_name` + `data_bucket_name` (CFN), `ssh_config_path` (tempfile), `physai_session`, `physai_cli` (CLI subprocess wrapper), `fake_project_dir`, `fake_containers_built` |
+| `regression/physai_regression/checks/` | Pytest checks; each function is one regression test. Layer 1 (`@pytest.mark.platform`) runs by default; Layer 2 (`@pytest.mark.builtin_example`) runs only with `--builtin-examples` |
+| `regression/fixtures/fake-project/` | Tiny project (`fake-converter`, `fake-trainer`, `fake-evaluator`) that exercises the full pipeline path in seconds |
+| `regression/tests/` | Unit tests for the regression code itself (no AWS/SSH) |
 
 ---
 
@@ -248,6 +270,10 @@ Practical rules when scripting around `cdk`:
 - When generating commands for a human to copy-paste (e.g.
   `infra/scripts/cleanup.sh`), emit `export AWS_REGION=<region>` before
   the `cdk` line rather than appending `--region` to the cdk command.
+
+The canonical implementation is
+`regression/physai_regression/orchestration/deploy.py` — copy that
+pattern when adding new `cdk` invocations.
 
 ---
 

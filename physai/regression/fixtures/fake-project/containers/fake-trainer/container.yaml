@@ -1,0 +1,3 @@
+name: fake-trainer
+partition: gpu
+gres: "gpu:1"

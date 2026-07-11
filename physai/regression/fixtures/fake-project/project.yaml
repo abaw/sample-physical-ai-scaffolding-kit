@@ -1,0 +1,5 @@
+base_image: public.ecr.aws/docker/library/python:3.12-slim-bookworm
+env:
+  # Skip enroot's NVIDIA hook (98-nvidia.sh) so this fixture builds and runs
+  # on both CPU and GPU nodes — the fake stages don't touch the GPU.
+  NVIDIA_VISIBLE_DEVICES: void
