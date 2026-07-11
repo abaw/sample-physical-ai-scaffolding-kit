@@ -10,6 +10,14 @@ require_node_type controller compute login
 CONTROLLER_IPS="${1:?Usage: start_slurm.sh <controller_ips>}"
 
 if [[ "$NODE_TYPE" == "controller" ]]; then
+  # Sanitize the HyperPod Slurm 25.11 topology config BEFORE slurmctld's first
+  # start, so it starts cleanly instead of crash-looping on the generated config
+  # (see sanitize_slurm_topology in _lib.sh). At initial provision no scontrol
+  # reconfigure precedes this start, so a one-shot edit is sufficient here; the
+  # .path watcher (install_topology_watcher.sh) covers later agent
+  # regenerations. No-op when real topology is present or the config is clean.
+  sanitize_slurm_topology || true
+
   echo "Starting slurmctld (controller)..."
   systemctl enable --now slurmctld
   # Prevent slurmd from running on controller

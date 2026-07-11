@@ -80,5 +80,75 @@ slurm_reconfigure_with_retry() {
     return 1
 }
 
+# sanitize_slurm_topology: work around a HyperPod Slurm 25.11 topology config
+# that crashes slurmctld on the controller.
+#
+# Observed on HyperPod clusters on the Slurm 25.11 AMI: $SLURM_DIR/etc contains
+# an empty topology.yaml ("[]") and empty topology.conf, and the GPU
+# PartitionName carries a `Topology=tree` tag. With that config slurmctld
+# crash-loops on SIGSEGV and the controller never stays up (the visible
+# "No Assoc usage file" fatal is a downstream effect of that crash). We do not
+# know what makes HyperPod generate this config; a 24.11 cluster on the same
+# hardware had none of these lines and was healthy.
+#
+# Removing the empty topology files and stripping the Topology= token (i.e.
+# restoring the topology-free shape) is verified to let slurmctld start cleanly.
+# That is what this does.
+#
+# Idempotent. Returns 0 if it changed something (caller may then reconfigure),
+# 1 if nothing needed changing or real topology is present.
+sanitize_slurm_topology() {
+    local etc conf yaml tconf changed f yaml_stripped
+    etc="${SLURM_DIR:-/opt/slurm}/etc"
+    conf="$etc/slurm.conf"
+    yaml="$etc/topology.yaml"
+    tconf="$etc/topology.conf"
+    changed=false
+
+    if [[ ! -f "$conf" ]]; then
+        echo "sanitize_slurm_topology: $conf not found, skipping"
+        return 1
+    fi
+
+    # Safety guard: only act on HyperPod's EMPTY/placeholder topology artifacts.
+    # If real topology is defined (a topology.conf with SwitchName=/BlockName=
+    # entries, or a non-empty topology.yaml), this cluster legitimately uses
+    # topology-aware scheduling (e.g. p5) — leave everything untouched so the
+    # workaround can never disable a real feature.
+    if [[ -f "$tconf" ]] && grep -qiE '^[[:space:]]*(SwitchName|BlockName)=' "$tconf"; then
+        echo "sanitize_slurm_topology: $tconf defines real switches/blocks — not modifying"
+        return 1
+    fi
+    if [[ -f "$yaml" ]]; then
+        yaml_stripped=$(tr -d '[:space:]' < "$yaml")
+        if [[ -n "$yaml_stripped" && "$yaml_stripped" != "[]" ]]; then
+            echo "sanitize_slurm_topology: $yaml is non-empty — not modifying"
+            return 1
+        fi
+    fi
+
+    # Remove the empty topology files.
+    for f in "$yaml" "$tconf"; do
+        if [[ -e "$f" ]]; then
+            echo "sanitize_slurm_topology: removing empty $f"
+            rm -f "$f"
+            changed=true
+        fi
+    done
+
+    # Strip the orphaned `Topology=<x>` token from PartitionName lines.
+    if grep -Eq '^PartitionName=.*[[:space:]]Topology=' "$conf"; then
+        echo "sanitize_slurm_topology: stripping Topology= from PartitionName lines"
+        sed -i -E '/^PartitionName=/ s/[[:space:]]+Topology=[^[:space:]]+//g' "$conf"
+        changed=true
+    fi
+
+    if $changed; then
+        echo "sanitize_slurm_topology: applied HyperPod 25.11 topology workaround"
+        return 0
+    fi
+    return 1
+}
+
 _detect_node_type
 export NODE_TYPE
