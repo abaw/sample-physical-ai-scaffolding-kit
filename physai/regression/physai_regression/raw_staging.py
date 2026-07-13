@@ -29,6 +29,7 @@ responsibility, not this module's.
 """
 
 import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
@@ -41,17 +42,18 @@ from .orchestration.aws import s3_client
 # Substrings in an `aws s3 ls` error that mean "the cluster's IAM role
 # can't see this bucket/prefix" — i.e. fall back to laptop-driven
 # presigning. Any other error (network, endpoint, region mismatch)
-# propagates so a real platform problem isn't silently routed through
-# the slower fallback path. These match the structured forms the AWS CLI
-# emits ("An error occurred (AccessDenied) when calling ...") rather than
-# bare "403"/"404", which would also match a bucket or prefix named e.g.
-# `my-dataset-404` that the CLI echoes into an unrelated error message.
+# propagates so a real platform problem isn't silently routed through the
+# slower fallback path. These match only the parenthesized structured forms
+# the AWS CLI emits ("An error occurred (AccessDenied) when calling ..." /
+# "(403)") — not bare tokens like "403", "404", or "Forbidden", which also
+# appear in bucket/prefix names (e.g. `my-dataset-404`) or in unrelated
+# network/proxy error bodies the CLI echoes, and would wrongly divert a real
+# platform failure into the slow presign fallback.
 _S3_PERMISSION_HINTS = (
     "(AccessDenied)",
     "(NoSuchBucket)",
     "(403)",
     "(404)",
-    "Forbidden",
 )
 
 _HF_PKG_DIR = "/tmp/regression-hf-pkgs"
@@ -222,6 +224,24 @@ def stage_raw(
     except RuntimeError as e:
         raise RawSourceError(f"failed to stage {uri} at {_dest(name)}: {e}") from e
 
+    # Backstop against silent staging failures for every scheme: each stager
+    # wiped and re-populated /fsx/raw/<name>/, so an empty dest here means
+    # nothing landed (an empty hf download, a sync that copied only zero-byte
+    # dir markers, a wrong-region presign whose bodies were discarded, etc.).
+    # `ls -A` lists dotfiles too, so empty stdout == empty dir.
+    dest = shlex.quote(_dest(name))
+    try:
+        listing = session.run(f"ls -A {dest}")
+    except RuntimeError as e:
+        raise RawSourceError(
+            f"failed to verify staged content at {_dest(name)} for {uri}: {e}"
+        ) from e
+    if not listing.strip():
+        raise RawSourceError(
+            f"staging {uri} produced no files at {_dest(name)} — the source may "
+            f"be empty or the download silently failed"
+        )
+
 
 def _file_stage(session, parsed: FileSource, name: str) -> None:
     """``rsync`` a local directory's contents into ``/fsx/raw/<name>/``."""
@@ -247,7 +267,7 @@ def _s3_stage(
     src = shlex.quote(f"s3://{parsed.bucket}/{parsed.prefix}")
     dest = shlex.quote(_dest(name))
     try:
-        session.run(f"aws s3 ls {src}")
+        listing = session.run(f"aws s3 ls {src}")
     except RuntimeError as e:
         msg = str(e)
         if not any(hint in msg for hint in _S3_PERMISSION_HINTS):
@@ -257,6 +277,13 @@ def _s3_stage(
             ) from e
         _s3_stage_via_presign(session, parsed, name, aws_profile, aws_region)
         return
+    # `aws s3 ls` on a prefix with zero objects and zero common-prefixes
+    # exits 0 with empty stdout; a subsequent `aws s3 sync` would copy nothing
+    # and leave an empty /fsx/raw/<name>/. Reject that here — symmetric with
+    # the presign path's "S3 prefix is empty" guard — so a mistyped or empty
+    # prefix fails loudly instead of silently staging nothing.
+    if not listing.strip():
+        raise RawSourceError(f"S3 prefix is empty (no objects to fetch): {parsed.raw}")
     _reset_dest(session, name)
     session.run(f"aws s3 sync {src} {dest}")
 
@@ -285,9 +312,23 @@ def _s3_stage_via_presign(
     # signed for the wrong region gets a PermanentRedirect from S3 — and curl
     # writes the redirect's XML body to the output file. Resolve the bucket's
     # real region and presign against that, not the run region.
-    bucket_region, _region_fell_back = _bucket_region(
+    bucket_region, region_fell_back = _bucket_region(
         parsed.bucket, aws_profile, aws_region
     )
+    if region_fell_back:
+        # The region couldn't be resolved; we're guessing with the run region.
+        # If that guess is wrong, S3 returns a PermanentRedirect and curl
+        # writes the redirect XML into each file — a silent corruption the
+        # post-stage content check can't catch (the files are non-empty).
+        # Warn loudly so the operator inspects.
+        print(
+            f"WARNING: could not resolve the home region of bucket "
+            f"{parsed.bucket!r}; presigning against fallback region "
+            f"{bucket_region!r}. If this is wrong, S3 returns a "
+            f"PermanentRedirect and curl writes the redirect XML into each "
+            f"downloaded file — inspect {_dest(name)} before trusting it.",
+            file=sys.stderr,
+        )
     urls = [_presign_s3_key(parsed.bucket, k, aws_profile, bucket_region) for k in keys]
     _reset_dest(session, name)
     dest = _dest(name)
