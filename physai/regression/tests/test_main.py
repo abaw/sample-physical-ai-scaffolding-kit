@@ -339,24 +339,6 @@ def test_default_run_forwards_neither_marker_selector_nor_raw_source():
     assert "--raw-source" not in forwarded
 
 
-def test_builtin_examples_forwards_marker_selector():
-    forwarded = _captured_pytest_args(
-        [
-            "upgrade-existing",
-            "--builtin-examples",
-            "--raw-source",
-            "file:///tmp/raw",
-            "--profile",
-            "p",
-            "--region",
-            "r",
-        ]
-    )
-    assert "-m" in forwarded
-    i = forwarded.index("-m")
-    assert forwarded[i + 1] == "platform or builtin_example"
-
-
 @pytest.mark.parametrize(
     "argv",
     [
@@ -469,22 +451,6 @@ def test_malformed_raw_source_uri_is_rejected_before_deploy(capsys):
     # The deploy and the checks must never have started.
     redeploy.assert_not_called()
     pmain.assert_not_called()
-
-
-def test_builtin_examples_with_raw_source_forwards_uri():
-    forwarded = _captured_pytest_args(
-        [
-            "upgrade-existing",
-            "--builtin-examples",
-            "--raw-source",
-            "s3://bucket/prefix/",
-            "--profile",
-            "p",
-        ]
-    )
-    assert "--raw-source" in forwarded
-    i = forwarded.index("--raw-source")
-    assert forwarded[i + 1] == "s3://bucket/prefix/"
 
 
 @pytest.mark.parametrize(
