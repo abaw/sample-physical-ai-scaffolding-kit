@@ -41,6 +41,9 @@ def test_aws_cli_args_includes_only_set_values():
     assert deploy.aws_cli_args("p", None) == ["--profile", "p"]
     assert deploy.aws_cli_args(None, "r") == ["--region", "r"]
     assert deploy.aws_cli_args("p", "r") == ["--profile", "p", "--region", "r"]
+    # include_region=False drops --region (the cdk case) but keeps --profile.
+    assert deploy.aws_cli_args("p", "r", include_region=False) == ["--profile", "p"]
+    assert deploy.aws_cli_args(None, "r", include_region=False) == []
 
 
 # ── describe_stack ────────────────────────────────────────────────────────
@@ -517,6 +520,66 @@ def test_deploy_from_ref_raises_on_git_failure():
     with patch("physai_regression.orchestration.flows.subprocess.run", side_effect=run):
         with pytest.raises(RuntimeError, match="git worktree add"):
             flows.deploy_from_ref("nope", profile=None, region=None)
+
+
+def test_deploy_from_ref_prints_worktree_path_when_npm_ci_fails(capsys):
+    """npm ci failure after worktree-add must surface the worktree path."""
+    run_stub, calls = _git_dispatch(toplevel="/repo", prefix="physai/")
+    with (
+        patch(
+            "physai_regression.orchestration.flows.subprocess.run",
+            side_effect=run_stub,
+        ),
+        patch(
+            "physai_regression.orchestration.flows.deploy.npm_ci",
+            side_effect=RuntimeError("npm ci failed in X (exit 1)"),
+        ),
+        patch("physai_regression.orchestration.flows.deploy.cdk_deploy") as do_deploy,
+    ):
+        with pytest.raises(RuntimeError, match="npm ci failed"):
+            flows.deploy_from_ref("v0.2.0", profile="p", region="r")
+    do_deploy.assert_not_called()  # cdk_deploy never reached
+    add_cmd = next(c for c in calls if "worktree" in c and "add" in c)
+    worktree_root = add_cmd[add_cmd.index("--detach") + 1]
+    err = capsys.readouterr().err
+    assert worktree_root in err
+    assert "git worktree remove --force" in err
+
+
+def test_deploy_from_ref_prints_worktree_path_when_cdk_deploy_fails(capsys):
+    """cdk deploy failure after worktree-add must surface the worktree path."""
+    run_stub, calls = _git_dispatch(toplevel="/repo", prefix="physai/")
+    with (
+        patch(
+            "physai_regression.orchestration.flows.subprocess.run",
+            side_effect=run_stub,
+        ),
+        patch("physai_regression.orchestration.flows.deploy.npm_ci"),
+        patch(
+            "physai_regression.orchestration.flows.deploy.cdk_deploy",
+            side_effect=RuntimeError("cdk deploy PhysaiClusterStack failed (exit 1)"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="cdk deploy"):
+            flows.deploy_from_ref("HEAD", profile=None, region=None)
+    add_cmd = next(c for c in calls if "worktree" in c and "add" in c)
+    worktree_root = add_cmd[add_cmd.index("--detach") + 1]
+    assert worktree_root in capsys.readouterr().err
+
+
+def test_deploy_from_ref_prints_nothing_on_success(capsys):
+    """The keep-on-failure message must not fire on the happy path."""
+    run_stub, _ = _git_dispatch(toplevel="/repo", prefix="physai/")
+    with (
+        patch(
+            "physai_regression.orchestration.flows.subprocess.run",
+            side_effect=run_stub,
+        ),
+        patch("physai_regression.orchestration.flows.deploy.npm_ci"),
+        patch("physai_regression.orchestration.flows.deploy.cdk_deploy"),
+    ):
+        flows.deploy_from_ref("HEAD", profile=None, region=None)
+    assert "worktree left for inspection" not in capsys.readouterr().err
 
 
 # ── flows.destroy_and_remove_worktree ─────────────────────────────────────

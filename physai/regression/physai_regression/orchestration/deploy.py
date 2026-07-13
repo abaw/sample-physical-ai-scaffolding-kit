@@ -30,13 +30,23 @@ RUN_LIFECYCLE_SH = REPO_ROOT / "infra" / "scripts" / "run-lifecycle.sh"
 CLUSTER_STACK = "PhysaiClusterStack"
 
 
-def aws_cli_args(profile: str | None, region: str | None) -> list[str]:
+def aws_cli_args(
+    profile: str | None,
+    region: str | None,
+    *,
+    include_region: bool = True,
+) -> list[str]:
     """Build ``--profile``/``--region`` argv suffixes for an ``aws`` CLI call,
-    skipping each flag when its value is None."""
+    skipping each flag when its value is None.
+
+    ``include_region=False`` omits ``--region`` even when ``region`` is set —
+    used for ``cdk`` invocations, which silently ignore ``--region`` and get
+    the region from ``AWS_REGION``/``AWS_DEFAULT_REGION`` in the subprocess env
+    instead (see module docstring; aws/aws-cdk#28725)."""
     args: list[str] = []
     if profile:
         args += ["--profile", profile]
-    if region:
+    if include_region and region:
         args += ["--region", region]
     return args
 
@@ -138,10 +148,6 @@ def stack_exists(
     return bool(status) and status != "DELETE_COMPLETE"
 
 
-def _cdk_profile_args(profile: str | None) -> list[str]:
-    return ["--profile", profile] if profile else []
-
-
 def cdk_deploy(
     stack: str = CLUSTER_STACK,
     profile: str | None = None,
@@ -162,7 +168,7 @@ def cdk_deploy(
         stack,
         "--require-approval",
         "never",
-        *_cdk_profile_args(profile),
+        *aws_cli_args(profile, region, include_region=False),
     ]
     r = subprocess.run(cmd, cwd=str(cwd), env=_cdk_env(region), check=False)
     if r.returncode != 0:
@@ -191,7 +197,7 @@ def cdk_destroy(
         "destroy",
         stack,
         "--force",
-        *_cdk_profile_args(profile),
+        *aws_cli_args(profile, region, include_region=False),
     ]
     r = subprocess.run(cmd, cwd=str(cwd), env=_cdk_env(region), check=False)
     if r.returncode != 0:
