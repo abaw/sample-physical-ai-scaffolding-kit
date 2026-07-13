@@ -9,8 +9,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 from physai_regression.orchestration import deploy, flows
+
+
+def _client_error(code: str, message: str) -> ClientError:
+    """Build a botocore ClientError with the given error Code/Message."""
+    return ClientError({"Error": {"Code": code, "Message": message}}, "DescribeStacks")
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> MagicMock:
@@ -40,57 +46,81 @@ def test_aws_cli_args_includes_only_set_values():
 # ── describe_stack ────────────────────────────────────────────────────────
 
 
-def test_describe_stack_returns_stripped_output():
-    with patch(
-        "physai_regression.orchestration.deploy.subprocess.run",
-        return_value=_completed(stdout="CREATE_COMPLETE\n"),
-    ) as run:
-        out = deploy.describe_stack("PhysaiClusterStack", "Stacks[0].StackStatus")
-    assert out == "CREATE_COMPLETE"
-    cmd = run.call_args.args[0]
-    assert cmd[0] == "aws"
-    assert "describe-stacks" in cmd
-    assert "PhysaiClusterStack" in cmd
+def _cfn_mock(*, describe_return=None, describe_side_effect=None) -> MagicMock:
+    """Patch the CloudFormation client factory to a mock and return it.
+
+    ``describe_return`` sets the ``describe_stacks`` response dict;
+    ``describe_side_effect`` makes it raise instead.
+    """
+    client = MagicMock()
+    if describe_side_effect is not None:
+        client.describe_stacks.side_effect = describe_side_effect
+    else:
+        client.describe_stacks.return_value = describe_return
+    return client
 
 
-def test_describe_stack_normalizes_None_to_empty():
+def test_describe_stack_returns_stack_dict():
+    client = _cfn_mock(
+        describe_return={
+            "Stacks": [
+                {"StackName": "PhysaiClusterStack", "StackStatus": "CREATE_COMPLETE"}
+            ]
+        }
+    )
     with patch(
-        "physai_regression.orchestration.deploy.subprocess.run",
-        return_value=_completed(stdout="None\n"),
+        "physai_regression.orchestration.deploy.cloudformation_client",
+        return_value=client,
     ):
-        assert deploy.describe_stack("X", "Stacks[0].Outputs[?Foo]") == ""
+        stack = deploy.describe_stack("PhysaiClusterStack", profile="p", region="r")
+    assert stack["StackStatus"] == "CREATE_COMPLETE"
+    client.describe_stacks.assert_called_once_with(StackName="PhysaiClusterStack")
 
 
 def test_describe_stack_raises_StackNotFound_when_stack_absent():
     """CloudFormation's "does not exist" ValidationError → StackNotFound."""
+    client = _cfn_mock(
+        describe_side_effect=_client_error(
+            "ValidationError", "Stack with id X does not exist"
+        )
+    )
     with patch(
-        "physai_regression.orchestration.deploy.subprocess.run",
-        return_value=_completed(
-            returncode=255,
-            stderr=(
-                "An error occurred (ValidationError) when calling the "
-                "DescribeStacks operation: Stack with id X does not exist"
-            ),
-        ),
+        "physai_regression.orchestration.deploy.cloudformation_client",
+        return_value=client,
     ):
         with pytest.raises(deploy.StackNotFound, match="does not exist"):
-            deploy.describe_stack("X", "Stacks[0].StackStatus")
+            deploy.describe_stack("X")
+
+
+def test_describe_stack_generic_validation_error_is_query_error():
+    """A ValidationError that is NOT "does not exist" must be a query error,
+    not mistaken for absence (ValidationError is a generic code)."""
+    client = _cfn_mock(
+        describe_side_effect=_client_error(
+            "ValidationError", "Template error: something else"
+        )
+    )
+    with patch(
+        "physai_regression.orchestration.deploy.cloudformation_client",
+        return_value=client,
+    ):
+        with pytest.raises(deploy.StackQueryError, match="ValidationError"):
+            deploy.describe_stack("X")
 
 
 def test_describe_stack_raises_StackQueryError_on_non_absence_failure():
     """Auth/network/throttle failures must NOT be mistaken for absence."""
+    client = _cfn_mock(
+        describe_side_effect=_client_error(
+            "ExpiredToken", "The security token included in the request has expired"
+        )
+    )
     with patch(
-        "physai_regression.orchestration.deploy.subprocess.run",
-        return_value=_completed(
-            returncode=255,
-            stderr=(
-                "An error occurred (ExpiredToken) when calling the "
-                "DescribeStacks operation: The security token has expired"
-            ),
-        ),
+        "physai_regression.orchestration.deploy.cloudformation_client",
+        return_value=client,
     ):
         with pytest.raises(deploy.StackQueryError, match="ExpiredToken"):
-            deploy.describe_stack("X", "Stacks[0].StackStatus")
+            deploy.describe_stack("X")
 
 
 # ── stack_exists ──────────────────────────────────────────────────────────
@@ -99,14 +129,14 @@ def test_describe_stack_raises_StackQueryError_on_non_absence_failure():
 def test_stack_exists_returns_true_for_running_stack():
     with patch(
         "physai_regression.orchestration.deploy.describe_stack",
-        return_value="CREATE_COMPLETE",
+        return_value={"StackStatus": "CREATE_COMPLETE"},
     ) as ds:
         assert (
             deploy.stack_exists("PhysaiClusterStack", profile="p", region="r") is True
         )
-    # Pin the status query, not just the kwargs — a JMESPath regression
-    # (e.g. querying the wrong field) would otherwise pass.
-    assert ds.call_args.args == ("PhysaiClusterStack", "Stacks[0].StackStatus")
+    # Pin the stack name and forwarded creds — a regression that dropped
+    # profile/region would otherwise pass.
+    assert ds.call_args.args == ("PhysaiClusterStack",)
     assert ds.call_args.kwargs == {"profile": "p", "region": "r"}
 
 
@@ -133,7 +163,7 @@ def test_stack_exists_propagates_query_error_rather_than_reporting_absent():
 def test_stack_exists_returns_false_for_delete_complete():
     with patch(
         "physai_regression.orchestration.deploy.describe_stack",
-        return_value="DELETE_COMPLETE",
+        return_value={"StackStatus": "DELETE_COMPLETE"},
     ):
         assert deploy.stack_exists("PhysaiClusterStack") is False
 
